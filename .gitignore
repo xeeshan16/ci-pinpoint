@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+reports/
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+.ci-pinpoint.toml
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
