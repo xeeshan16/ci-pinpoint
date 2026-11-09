@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 45
     env:
       MODEL: ${{ inputs.model || 'qwen2.5:3b' }}
+      EMBED_MODEL: nomic-embed-text
       CI_PINPOINT_TIMEOUT_S: "900"
       CI_PINPOINT_MAX_RETRIES: "1"
     steps:
@@ -47,7 +48,12 @@ jobs:
           fi
           for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags > /dev/null && break; sleep 1; done
           ollama --version
-      - run: ollama pull "$MODEL"
+      - run: ollama pull "$MODEL" && ollama pull "$EMBED_MODEL"
+      - name: block ranking with real embeddings
+        run: |
+          uv run python scripts/selection_report.py --embedder ollama --embed-model "$EMBED_MODEL" \
+            --out reports/selection
+          cat reports/selection/selection.md >> "$GITHUB_STEP_SUMMARY"
       - name: diagnose the real CI logs
         run: |
           uv run python scripts/fixture_report.py --provider ollama --model "$MODEL" --out reports/real-model

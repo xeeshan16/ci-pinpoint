@@ -73,6 +73,8 @@ jobs:
           uv pip install --python /tmp/clean/bin/python dist/*.whl
           /tmp/clean/bin/ci-pinpoint --version
       - name: explain a real failed job log (fake provider)
+        env:
+          CI_PINPOINT_CACHE_DIR: /tmp/ci-pinpoint-cache
         run: |
           mkdir -p reports
           /tmp/clean/bin/ci-pinpoint explain tests/fixtures/logs/smoke-test-missing-metrics.log.gz \
@@ -89,7 +91,8 @@ jobs:
       - name: fixture smoke report (fake provider)
         run: |
           uv run python scripts/fixture_report.py --provider fake --out reports/fixtures
-          cat reports/fixtures/report.md >> "$GITHUB_STEP_SUMMARY"
+          uv run python scripts/selection_report.py --embedder fake --out reports/selection
+          cat reports/fixtures/report.md reports/selection/selection.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
