@@ -24,7 +24,8 @@ from ci_pinpoint.config import load_settings
 from ci_pinpoint.logging_setup import configure
 from ci_pinpoint.models import RawLog
 from ci_pinpoint.pipeline import explain
-from ci_pinpoint.providers import build_chat
+from ci_pinpoint.providers import build_chat, build_embedder
+from ci_pinpoint.ranking import EmbeddingRanker
 from ci_pinpoint.render import render_markdown
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +37,7 @@ def main() -> int:
     parser.add_argument("--provider")
     parser.add_argument("--model")
     parser.add_argument("--budget", type=int)
+    parser.add_argument("--embedder", help="auto (default), none, ollama, openai, fake")
     parser.add_argument("--out", type=Path, default=Path("reports/fixtures"))
     parser.add_argument(
         "--require-cited",
@@ -46,9 +48,16 @@ def main() -> int:
     configure(1, os.environ)  # warnings and info (incl. unparseable replies) to stderr
 
     settings = load_settings(
-        overrides={"provider": args.provider, "model": args.model, "budget_tokens": args.budget}
+        overrides={
+            "provider": args.provider,
+            "model": args.model,
+            "budget_tokens": args.budget,
+            "embedder": args.embedder,
+        }
     )
     chat = build_chat(settings, os.environ)
+    embedder = build_embedder(settings, os.environ)
+    ranker = EmbeddingRanker(embedder) if embedder is not None else None
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -62,6 +71,7 @@ def main() -> int:
             ),
             settings,
             chat,
+            ranker=ranker,
         )
         selected = [t for block in brief.excerpt for _, t in block.lines]
         in_excerpt = all(any(a in t for t in selected) for a in case["anchors"])
@@ -94,6 +104,7 @@ def main() -> int:
         "provider": chat.provider,
         "model": chat.model,
         "budget_tokens": settings.budget_tokens,
+        "ranked_with": ranker.model if ranker and ranker.error is None else None,
         "cases": n,
         "root_cause_in_excerpt": sum(r["root_cause_in_excerpt"] for r in rows),
         "root_cause_cited": sum(r["root_cause_cited"] for r in rows),
@@ -103,7 +114,8 @@ def main() -> int:
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2))
 
     table = [
-        f"#### Real CI logs: {chat.provider}/{chat.model}, budget {settings.budget_tokens} tokens",
+        f"#### Real CI logs: {chat.provider}/{chat.model}, budget {settings.budget_tokens} tokens, "
+        f"ranking: {summary['ranked_with'] or 'heuristic only'}",
         "",
         "| case | root cause in excerpt | root cause cited | category (label → predicted) "
         "| tokens raw → excerpt | model tokens in/out | latency |",

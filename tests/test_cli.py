@@ -134,3 +134,44 @@ def test_version(capsys: pytest.CaptureFixture[str]) -> None:
         run(["--version"])
     assert info.value.code == 0
     assert "ci-pinpoint" in capsys.readouterr().out
+
+
+def test_second_run_is_served_from_cache(tmp_path: Path) -> None:
+    env = {"CI_PINPOINT_NO_CACHE": "", "CI_PINPOINT_CACHE_DIR": str(tmp_path)}
+    code, first, _ = _run(["explain", SMOKE, "--provider", "fake"], env=env)
+    assert code == EXIT_OK
+    assert "from cache" not in first
+    code, second, _ = _run(["explain", SMOKE, "--provider", "fake"], env=env)
+    assert code == EXIT_OK
+    assert "from cache" in second
+    code, third, _ = _run(["explain", SMOKE, "--provider", "fake", "--no-cache"], env=env)
+    assert "from cache" not in third
+    code, other_budget, _ = _run(
+        ["explain", SMOKE, "--provider", "fake", "--budget", "900"], env=env
+    )
+    assert "from cache" not in other_budget
+
+
+def test_embedder_ranking_is_reported(tmp_path: Path) -> None:
+    env = {"CI_PINPOINT_NO_CACHE": "", "CI_PINPOINT_CACHE_DIR": str(tmp_path)}
+    code, out, _ = _run(["explain", SMOKE, "--no-llm", "--embedder", "fake"], env=env)
+    assert code == EXIT_OK
+    assert "ranked with fake-hash-256" in out
+    assert (tmp_path / "embeddings.sqlite3").exists()
+
+
+def test_unavailable_auto_embedder_falls_back_quietly() -> None:
+    env = {"CI_PINPOINT_EMBEDDER": "auto", "OLLAMA_HOST": "http://127.0.0.1:9"}
+    code, out, _ = _run(["explain", SMOKE, "--no-llm"], env=env)
+    assert code == EXIT_OK
+    assert "ranked with" not in out
+    assert "MISSING              gen_ai_request_model" in out
+
+
+def test_unwritable_cache_dir_does_not_break_explain(tmp_path: Path) -> None:
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    env = {"CI_PINPOINT_NO_CACHE": "", "CI_PINPOINT_CACHE_DIR": str(blocker)}
+    code, out, _ = _run(["explain", SMOKE, "--provider", "fake", "--embedder", "fake"], env=env)
+    assert code == EXIT_OK
+    assert "ranked with fake-hash-256" in out
