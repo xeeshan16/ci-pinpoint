@@ -3,6 +3,7 @@ name: real-model
 # Runs ci-pinpoint against the labelled real CI logs with a real local model
 # (Ollama on the runner's CPU). Its report is the source of the sample output
 # in the README. Not a required check: model downloads can be slow or flaky.
+# It runs after every green CI run on main, so docs-only commits re-measure too.
 
 on:
   workflow_dispatch:
@@ -10,13 +11,12 @@ on:
       model:
         description: Ollama model
         default: qwen2.5:3b
-  push:
+  # After CI is green on main, not in parallel with it: starting both at once
+  # left CI jobs unscheduled on this account (day 2, PROGRESS.md).
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
-    paths:
-      - "src/**"
-      - "scripts/fixture_report.py"
-      - "tests/fixtures/logs/**"
-      - ".github/workflows/real-model.yml"
 
 permissions:
   contents: read
@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   ollama:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -36,6 +37,8 @@ jobs:
       CI_PINPOINT_MAX_RETRIES: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
