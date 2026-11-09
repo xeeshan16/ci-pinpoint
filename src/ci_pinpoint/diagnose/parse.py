@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from ci_pinpoint.models import Diagnosis, FailureCategory
 
+MAX_CITATIONS = 8
 FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
@@ -18,33 +19,42 @@ class DiagnosisParseError(ValueError):
     pass
 
 
+class _TruncatedError(Exception):
+    pass
+
+
 def _first_json_object(text: str) -> str | None:
-    """Find the first balanced {...} span, respecting strings."""
+    """The first top-level {...} span, respecting strings.
+
+    Only the outermost object counts: if it never closes, the reply was cut off,
+    and an inner object (a single citation, a ``{0}`` quoted from the log) must
+    not be mistaken for the answer.
+    """
     start = text.find("{")
-    while start != -1:
-        depth = 0
-        in_string = False
-        escaped = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_string = False
-                continue
-            if ch == '"':
-                in_string = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-        start = text.find("{", start + 1)
-    return None
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise _TruncatedError
 
 
 _TEXT_KEYS = ("description", "explanation", "cause", "summary", "details", "text", "reason")
@@ -135,7 +145,9 @@ def _normalise(data: dict[str, Any]) -> dict[str, Any]:
         out["category"] = value if value in valid else FailureCategory.OTHER.value
     citations = out.get("citations")
     if isinstance(citations, list):
-        out["citations"] = [_citation(item) for item in citations]
+        # The schema allows 8; extra citations are dropped rather than failing the
+        # whole answer (they are listed most important first).
+        out["citations"] = [_citation(item) for item in citations[:MAX_CITATIONS]]
 
     out["confidence"] = _as_confidence(out.get("confidence"))
     if isinstance(out.get("summary"), str) and len(out["summary"]) > 300:
@@ -148,11 +160,18 @@ def parse_diagnosis(text: str) -> Diagnosis:
     candidates.append(text)
     last_error = "no JSON object found in the reply"
     for candidate in candidates:
-        blob = _first_json_object(candidate)
+        try:
+            blob = _first_json_object(candidate)
+        except _TruncatedError:
+            last_error = (
+                "the JSON object is incomplete (the reply was probably cut off); "
+                "keep root_cause short and do not paste log lines into it"
+            )
+            continue
         if blob is None:
             continue
         try:
-            data = json.loads(blob)
+            data = json.loads(blob, strict=False)
         except json.JSONDecodeError as exc:
             last_error = f"invalid JSON: {exc.msg} at position {exc.pos}"
             continue

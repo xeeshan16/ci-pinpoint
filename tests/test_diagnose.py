@@ -254,3 +254,38 @@ def test_diagnose_sends_the_schema() -> None:
         "suggested_fix",
         "confidence",
     ]
+
+
+def test_truncated_reply_is_not_mistaken_for_an_inner_object() -> None:
+    """Seen with qwen2.5:3b: a reply cut off at the output limit still contains a
+    complete citation object; that must not be parsed as the answer."""
+    full = _reply(root_cause="shell: /usr/bin/bash -e {0} and more")
+    cut = full[: full.index('"citations"') + 40]
+    with pytest.raises(DiagnosisParseError, match="incomplete"):
+        parse_diagnosis(cut)
+
+
+def test_raw_newlines_inside_strings_are_tolerated() -> None:
+    reply = _reply().replace("The test could not connect", "The test\ncould not connect")
+    assert "\n" in parse_diagnosis(reply).root_cause
+
+
+def test_extra_citations_are_clipped_not_fatal() -> None:
+    many = [{"line": i, "text": f"line {i}"} for i in range(1, 14)]
+    assert len(parse_diagnosis(_reply(citations=many)).citations) == 8
+
+
+def test_cut_off_reply_tells_the_model_about_the_limit() -> None:
+    class Truncating(ScriptedChat):
+        def complete(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            completion = super().complete(messages, **kwargs)
+            if len(self.requests) == 1:
+                return completion.__class__(
+                    completion.text, completion.model, completion.usage, 0.0, "length"
+                )
+            return completion
+
+    chat = Truncating([_reply()[:60], _reply()])
+    result = _run(chat)
+    assert result.attempts == 2
+    assert "1024-token output limit" in chat.requests[1][-1].content

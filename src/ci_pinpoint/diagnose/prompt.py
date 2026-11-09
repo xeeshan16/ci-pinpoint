@@ -37,7 +37,8 @@ DIAGNOSIS_SCHEMA: dict[str, object] = {
 _SCHEMA_HINT = {
     "category": " | ".join(c.value for c in FailureCategory),
     "summary": "one sentence a developer reads first (max 300 chars)",
-    "root_cause": "what actually broke and why, grounded in the cited lines",
+    "root_cause": "what actually broke and why, in at most 3 sentences; refer to lines "
+    "by number instead of pasting them",
     "citations": [{"line": "<number from the L prefix>", "text": "<that line, copied verbatim>"}],
     "suggested_fix": "the concrete next step: a command, a file to change, a setting",
     "confidence": "0.0 to 1.0",
@@ -61,7 +62,8 @@ Answer with one flat JSON object and nothing else, with exactly these keys
 {json.dumps(_SCHEMA_HINT, indent=2)}
 
 Rules for citations:
-- Cite 1 to 5 lines that prove the root cause, most important first.
+- Cite 1 to 5 lines that prove the root cause, most important first. Prefer the
+  line that states the cause over "exit code" lines and stack frames.
 - "line" must be a number shown in the excerpt; "text" must be that line copied verbatim.
 - Do not cite lines that are not in the excerpt. Uncheckable citations are discarded.
 """

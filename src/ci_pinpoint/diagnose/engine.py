@@ -52,6 +52,8 @@ def diagnose(
             diagnosis = parse_diagnosis(completion.text)
         except DiagnosisParseError as exc:
             last_error = str(exc)
+            if completion.finish_reason in ("length", "max_tokens"):
+                last_error += f" (stopped at the {max_output_tokens}-token output limit)"
             log.warning(
                 "model reply did not parse",
                 extra={"attempt": attempt, "error": last_error, "reply": completion.text[:600]},
