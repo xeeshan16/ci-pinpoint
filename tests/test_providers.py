@@ -12,6 +12,7 @@ from ci_pinpoint.providers import (
     ProviderError,
     build_chat,
     build_embedder,
+    resolve_embedder,
     resolve_provider,
 )
 from ci_pinpoint.providers.anthropic import AnthropicChat
@@ -303,24 +304,49 @@ def test_build_chat_reports_missing_configuration() -> None:
 
 
 def test_build_embedder_variants() -> None:
-    assert build_embedder(Settings(), {}).model == "nomic-embed-text"
-    assert isinstance(
-        build_embedder(Settings(), {"CI_PINPOINT_EMBED_PROVIDER": "fake"}), FakeEmbedder
-    )
-    assert build_embedder(
-        Settings(), {"CI_PINPOINT_EMBED_PROVIDER": "openai", "OPENAI_API_KEY": "o"}
-    ).model == ("text-embedding-3-small")
+    ollama = build_embedder(Settings(), {})
+    assert ollama is not None
+    assert ollama.model == "nomic-embed-text"
+    assert isinstance(build_embedder(Settings(embedder="fake"), {}), FakeEmbedder)
+    openai = build_embedder(Settings(embedder="openai"), {"OPENAI_API_KEY": "o"})
+    assert openai is not None
+    assert openai.model == "text-embedding-3-small"
     custom = build_embedder(
-        Settings(),
-        {
-            "CI_PINPOINT_EMBED_PROVIDER": "openai-compatible",
-            "CI_PINPOINT_EMBED_BASE_URL": "http://x/v1",
-            "CI_PINPOINT_EMBED_MODEL": "bge",
-        },
+        Settings(embedder="openai-compatible", embed_model="bge"),
+        {"CI_PINPOINT_EMBED_BASE_URL": "http://x/v1"},
     )
+    assert custom is not None
     assert custom.model == "bge"
-    with pytest.raises(ConfigError, match="unknown embedding provider"):
-        build_embedder(Settings(), {"CI_PINPOINT_EMBED_PROVIDER": "nope"})
+    assert build_embedder(Settings(embedder="none"), {}) is None
+    with pytest.raises(ConfigError, match="CI_PINPOINT_EMBED_MODEL"):
+        build_embedder(Settings(embedder="openai-compatible"), {"CI_PINPOINT_EMBED_BASE_URL": "x"})
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, "ollama"),
+        ({"OPENAI_API_KEY": "o"}, "openai"),
+        ({"ANTHROPIC_API_KEY": "a"}, "none"),
+        ({"AZURE_OPENAI_ENDPOINT": "https://x"}, "none"),
+    ],
+)
+def test_auto_embedder_follows_the_chat_provider(env: dict[str, str], expected: str) -> None:
+    assert resolve_embedder(Settings(), env) == expected
+
+
+def test_auto_embedder_does_not_retry() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(503)
+
+    emb = build_embedder(Settings(), {}, transport=httpx.MockTransport(handler))
+    assert emb is not None
+    with pytest.raises(ProviderError):
+        emb.embed(["x"])
+    assert calls["n"] == 1
 
 
 SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}

@@ -119,40 +119,55 @@ def build_chat(
     )
 
 
+def resolve_embedder(settings: Settings, env: Mapping[str, str]) -> str:
+    """``auto`` follows the chat provider: Ollama and OpenAI have embedding
+    endpoints we can use without extra configuration; the others don't."""
+    if settings.embedder != "auto":
+        return settings.embedder
+    chat = resolve_provider(settings, env)
+    return chat if chat in ("ollama", "openai") else "none"
+
+
 def build_embedder(
     settings: Settings,
     env: Mapping[str, str] | None = None,
     *,
     transport: httpx.BaseTransport | None = None,
-) -> Embedder:
-    """Embedders follow ``CI_PINPOINT_EMBED_PROVIDER`` (``ollama``, ``openai``,
-    ``openai-compatible`` or ``fake``) and ``CI_PINPOINT_EMBED_MODEL``."""
+) -> Embedder | None:
+    """The embedder for block ranking, or ``None`` when ranking is off.
+
+    In ``auto`` mode a missing embedding model is not an error (ranking falls
+    back to heuristics), so calls are not retried to keep that fallback fast.
+    """
     env = os.environ if env is None else env
-    provider = env.get("CI_PINPOINT_EMBED_PROVIDER", "ollama")
-    model = env.get("CI_PINPOINT_EMBED_MODEL")
+    kind = resolve_embedder(settings, env)
+    retries = 0 if settings.embedder == "auto" else settings.max_retries
     http = JsonHttpClient(
-        timeout_s=settings.timeout_s,
-        retry=RetryPolicy(max_retries=settings.max_retries),
+        timeout_s=min(settings.timeout_s, 60.0),
+        retry=RetryPolicy(max_retries=retries),
         transport=transport,
     )
-    if provider == "fake":
+    model = settings.embed_model
+    if kind == "none":
+        return None
+    if kind == "fake":
         return FakeEmbedder()
-    if provider == "openai":
+    if kind == "openai":
         return OpenAICompatibleEmbedder(
             base_url=env.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             model=model or "text-embedding-3-small",
             api_key=_require(env, "OPENAI_API_KEY", "openai"),
             http=http,
         )
-    if provider == "openai-compatible":
+    if kind == "openai-compatible":
+        if not model:
+            raise ConfigError("embedder 'openai-compatible' needs CI_PINPOINT_EMBED_MODEL")
         return OpenAICompatibleEmbedder(
-            base_url=_require(env, "CI_PINPOINT_EMBED_BASE_URL", provider),
-            model=model or _require(env, "CI_PINPOINT_EMBED_MODEL", provider),
+            base_url=_require(env, "CI_PINPOINT_EMBED_BASE_URL", "openai-compatible"),
+            model=model,
             api_key=env.get("CI_PINPOINT_API_KEY"),
             http=http,
         )
-    if provider == "ollama":
-        return OpenAICompatibleEmbedder(
-            base_url=ollama_base_url(env), model=model or DEFAULT_OLLAMA_EMBED_MODEL, http=http
-        )
-    raise ConfigError(f"unknown embedding provider {provider!r}")
+    return OpenAICompatibleEmbedder(
+        base_url=ollama_base_url(env), model=model or DEFAULT_OLLAMA_EMBED_MODEL, http=http
+    )

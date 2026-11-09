@@ -4,7 +4,7 @@ Config file: ``.ci-pinpoint.toml`` in the working directory, or the path in
 ``CI_PINPOINT_CONFIG``. Keys mirror the environment variables without the
 ``CI_PINPOINT_`` prefix, lower-cased (``provider``, ``model``, ``base_url``,
 ``budget_tokens``, ``timeout_s``, ``max_retries``, ``max_output_tokens``,
-``repair_attempts``).
+``repair_attempts``, ``embedder``, ``embed_model``, ``cache_dir``).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 PROVIDERS = ("auto", "ollama", "openai", "anthropic", "azure", "openai-compatible", "fake")
+EMBEDDERS = ("auto", "none", "ollama", "openai", "openai-compatible", "fake")
 
 DEFAULT_MODELS = {
     "ollama": "qwen2.5:3b",
@@ -39,6 +40,9 @@ class Settings:
     max_retries: int = 3
     max_output_tokens: int = 1024
     repair_attempts: int = 1
+    embedder: str = "auto"
+    embed_model: str | None = None
+    cache_dir: str | None = None
     github_api_url: str = "https://api.github.com"
 
     def validate(self) -> Settings:
@@ -52,6 +56,10 @@ class Settings:
             raise ConfigError("timeout_s must be positive")
         if not 0 <= self.max_retries <= 10:
             raise ConfigError("max_retries must be between 0 and 10")
+        if self.embedder not in EMBEDDERS:
+            raise ConfigError(
+                f"unknown embedder {self.embedder!r}; use one of {', '.join(EMBEDDERS)}"
+            )
         if not 0 <= self.repair_attempts <= 3:
             raise ConfigError("repair_attempts must be between 0 and 3")
         return self
@@ -66,6 +74,9 @@ _ENV_KEYS = {
     "max_retries": "CI_PINPOINT_MAX_RETRIES",
     "max_output_tokens": "CI_PINPOINT_MAX_OUTPUT_TOKENS",
     "repair_attempts": "CI_PINPOINT_REPAIR_ATTEMPTS",
+    "embedder": "CI_PINPOINT_EMBEDDER",
+    "embed_model": "CI_PINPOINT_EMBED_MODEL",
+    "cache_dir": "CI_PINPOINT_CACHE_DIR",
     "github_api_url": "GITHUB_API_URL",
 }
 
