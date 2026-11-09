@@ -37,7 +37,7 @@ def main() -> int:
     parser.add_argument("--provider")
     parser.add_argument("--model")
     parser.add_argument("--budget", type=int)
-    parser.add_argument("--embedder", help="auto (default), none, ollama, openai, fake")
+    parser.add_argument("--embedder", help="none (default), auto, ollama, openai, fake")
     parser.add_argument("--out", type=Path, default=Path("reports/fixtures"))
     parser.add_argument(
         "--require-cited",

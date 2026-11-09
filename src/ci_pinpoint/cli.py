@@ -57,7 +57,7 @@ def _parser() -> argparse.ArgumentParser:
     ex.add_argument(
         "--embedder",
         choices=EMBEDDERS,
-        help="embedding model for block ranking (default: auto, follows --provider)",
+        help="embedder for block ranking: none (default), auto (follows --provider), ollama, ...",
     )
     ex.add_argument("--embed-model", help="embedding model name, e.g. nomic-embed-text")
     ex.add_argument("--no-llm", action="store_true", help="only select and print the log lines")

@@ -40,7 +40,9 @@ class Settings:
     max_retries: int = 3
     max_output_tokens: int = 1024
     repair_attempts: int = 1
-    embedder: str = "auto"
+    # Off by default: on the six labelled logs, nomic-embed-text ranking did not
+    # beat heuristics (docs/PROGRESS.md, day 2). The LogChunks eval decides.
+    embedder: str = "none"
     embed_model: str | None = None
     cache_dir: str | None = None
     github_api_url: str = "https://api.github.com"

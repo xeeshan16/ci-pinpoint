@@ -304,7 +304,8 @@ def test_build_chat_reports_missing_configuration() -> None:
 
 
 def test_build_embedder_variants() -> None:
-    ollama = build_embedder(Settings(), {})
+    assert build_embedder(Settings(), {}) is None  # off by default
+    ollama = build_embedder(Settings(embedder="ollama"), {})
     assert ollama is not None
     assert ollama.model == "nomic-embed-text"
     assert isinstance(build_embedder(Settings(embedder="fake"), {}), FakeEmbedder)
@@ -332,7 +333,7 @@ def test_build_embedder_variants() -> None:
     ],
 )
 def test_auto_embedder_follows_the_chat_provider(env: dict[str, str], expected: str) -> None:
-    assert resolve_embedder(Settings(), env) == expected
+    assert resolve_embedder(Settings(embedder="auto"), env) == expected
 
 
 def test_auto_embedder_does_not_retry() -> None:
@@ -342,7 +343,7 @@ def test_auto_embedder_does_not_retry() -> None:
         calls["n"] += 1
         return httpx.Response(503)
 
-    emb = build_embedder(Settings(), {}, transport=httpx.MockTransport(handler))
+    emb = build_embedder(Settings(embedder="auto"), {}, transport=httpx.MockTransport(handler))
     assert emb is not None
     with pytest.raises(ProviderError):
         emb.embed(["x"])
