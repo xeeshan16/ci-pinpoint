@@ -86,3 +86,73 @@ What the runs taught us, each fixed in its own commit:
 
 **Next (Day 2):** Drain-style template mining, block chunking, embedding ranking,
 token-budgeted context selection and an on-disk cache.
+
+## Day 2: 2026-11-09, retrieval core
+
+Built the same day as day 1: the routine was started again by hand after day 1 had
+already shipped, and its rule is to build the next unbuilt milestone rather than
+redo one. The plan is unchanged; the project is one day ahead of the calendar.
+
+**Shipped**
+- `templates`: a simplified Drain miner (fixed-depth prefix tree, position-wise
+  similarity, `<*>` wildcards) with masking for timestamps, hashes, UUIDs, numbers
+  and sizes. The 15,687-line Maven log becomes 291 templates in about 0.15 s.
+- Selection uses templates three ways: weak lines with very common templates are
+  dampened (strong ones are not: the same `Caused by` under 19 failing tests is the
+  common cause, not noise); block novelty is judged by evidence templates; and runs of
+  same-template filler inside a block are folded into one line plus
+  `... N more line(s) like: <template>`, shown to the model and in the output.
+- Block chunking: windows never cross a step boundary; lines longer than 400
+  characters are clipped in excerpts (citations of a clipped line still verify); a
+  block may always keep its single best line, even past its budget share.
+- `ranking`: optional embedding re-ranking that blends the heuristic score with
+  similarity to eleven short failure-mode descriptions and to the failed step's tail.
+  Falls back to heuristic order if the embedder fails; in `auto` mode it does not
+  retry, so a missing model costs one fast call.
+- `cache`: verified briefs on disk (atomic JSON, keyed by log hash plus every setting
+  that changes the answer) and embedding vectors in SQLite keyed by model and text
+  digest. `--no-cache`, `CI_PINPOINT_CACHE_DIR`, and a read-only cache directory
+  degrades to no cache instead of failing.
+- `--embedder`, `--embed-model`, and `ranked with ...` / `from cache` in the output.
+- `scripts/selection_report.py`: block rank of the root cause (MRR) and budget recall,
+  heuristic vs embeddings. CI runs it with the deterministic embedder; the
+  real-model workflow runs it with `nomic-embed-text`.
+
+**Measured** (the six labelled real logs; also the logs these changes were tuned on,
+so treat as a smoke test until the LogChunks eval)
+
+Root cause kept in the excerpt, by token budget:
+
+| selection | 150 | 200 | 300 | 400 | 600 | 800 |
+|---|---|---|---|---|---|---|
+| day 1 heuristics (local run) | - | 4/6 | 4/6 | 4/6 | 6/6 | 6/6 |
+| day 2 templates + folding + clipping (CI run 42674132270) | 5/6 | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+| day 2 + `nomic-embed-text` re-ranking (same run) | 5/6 | 5/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+
+- Mean reciprocal rank of the root-cause block among non-tail candidates: 0.833
+  heuristic, 0.833 with `nomic-embed-text`. Embeddings moved the smoke test's cause
+  from rank 2 to 1 and the Spring cause from 1 to 2. No gain, so ranking is **off by
+  default** ([ADR 0002](adr/0002-template-mining-and-optional-embedding-ranking.md)).
+- Diagnosis with the default settings, qwen2.5:3b on Ollama, CPU runner
+  ([run 42674132270](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42674132270)):
+  verified diagnosis 6/6 (day 1's last run: 5/6), labelled root cause cited 5/6
+  (4/6), category 2/6 (1/6). One run each, so model variance is not separated from
+  the change.
+- 189 tests pass locally and in CI on Python 3.11 to 3.13; coverage 96%.
+
+**Found along the way**
+- An `EmbeddingStore` leaked its SQLite connection when the source failed to load
+  after the store was opened; fixed, and the suite now runs clean with
+  `-W error::ResourceWarning`.
+- Raw-log token estimates briefly used clipped line lengths (63,069 became 52,732
+  for one log); raw size now uses unclipped lines, excerpts use clipped ones.
+- When `ci` and `real-model` started on the same push, GitHub left one or more `ci`
+  jobs unscheduled and failed the run without logs (three times, a different job
+  each time). Dispatched alone, the same commit was green
+  ([run 42676225715](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42676225715)).
+  `real-model` now runs after `ci` succeeds on main instead of in parallel.
+
+**Next (Day 3):** the evaluation harness: a LogChunks loader (fetched in CI, since
+Zenodo is blocked from the build sandbox), tail-N, grep and heuristics-only baselines,
+chunk line recall and precision at a fixed budget, token reduction, and
+`ci-pinpoint eval` with JSON and Markdown reports.

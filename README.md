@@ -8,7 +8,7 @@ of a 200,000-token log.
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-> Status: **day 1 of 7**, working end to end on real logs. Evaluation on a public
+> Status: **day 2 of 7**, working end to end on real logs. Evaluation on a public
 > labelled dataset, the MCP server and the GitHub Action land later this week (see
 > [docs/PLAN.md](docs/PLAN.md)).
 
@@ -96,7 +96,8 @@ ci-pinpoint explain build.log
 kubectl logs job/integration-tests | ci-pinpoint explain -
 ```
 
-Useful flags: `--format markdown|json` (Markdown for PR comments and job summaries, JSON for
+Running `explain` again on the same log with the same settings is answered from the local
+cache, with no model call. Useful flags: `--format markdown|json` (Markdown for PR comments and job summaries, JSON for
 agents and scripts), `--no-llm` (just the selected lines), `--budget 4000` (excerpt size in
 tokens), `--show-excerpt`, `-v`.
 
@@ -120,6 +121,8 @@ directory (or the file named by `CI_PINPOINT_CONFIG`). See [.env.example](.env.e
 | `GITHUB_TOKEN` / `GH_TOKEN` | | download Actions logs; `GITHUB_API_URL` for GitHub Enterprise |
 | `CI_PINPOINT_BUDGET_TOKENS` | `2000` | excerpt size sent to the model |
 | `CI_PINPOINT_TIMEOUT_S`, `CI_PINPOINT_MAX_RETRIES` | `120`, `3` | per-call timeout, retries with backoff |
+| `CI_PINPOINT_EMBEDDER`, `CI_PINPOINT_EMBED_MODEL` | `none` | block re-ranking: `ollama` (`nomic-embed-text`), `openai` (`text-embedding-3-small`), `openai-compatible` (+ `CI_PINPOINT_EMBED_BASE_URL`), `auto` |
+| `CI_PINPOINT_CACHE_DIR` | `~/.cache/ci-pinpoint` | verified briefs and embeddings; `--no-cache` or `CI_PINPOINT_NO_CACHE=1` to bypass |
 | `CI_PINPOINT_LOG_FORMAT` | text | `json` for structured logs on stderr |
 
 With `auto`, the provider is picked from what is set: `ANTHROPIC_API_KEY`, then
@@ -130,8 +133,11 @@ With `auto`, the provider is picked from what is set: `ANTHROPIC_API_KEY`, then
 ```mermaid
 flowchart LR
     A[log file / stdin /<br/>GitHub run URL] --> B[normalise<br/>timestamps, ANSI, groups,<br/>annotations, raw line numbers]
-    B --> C[score lines<br/>signals, negatives,<br/>failed-step boost]
-    C --> D[blocks under a<br/>token budget<br/>+ failed-step tails]
+    B --> T[mine templates<br/>Drain-style]
+    T --> C[score lines<br/>signals, negatives,<br/>rarity, failed-step boost]
+    C --> D[blocks under a<br/>token budget<br/>+ failed-step tails<br/>repeated lines folded]
+    C -.->|optional| R[re-rank blocks<br/>with embeddings]
+    R -.-> D
     D -->|excerpt with L-numbers| E[LLM diagnosis<br/>fixed JSON schema]
     E --> F{validate +<br/>verify citations}
     F -->|invalid or unverifiable| E
@@ -141,16 +147,24 @@ flowchart LR
 1. **Normalise.** Strip timestamps, ANSI codes and progress-bar redraws; split on GitHub
    `##[group]` and GitLab section markers; mark `##[error]` annotations and the script that
    GitHub echoes before each step. Line numbers always refer to the raw log.
-2. **Select.** Score each line from weighted signals (exceptions, `Caused by`, compiler
+2. **Mine templates.** A Drain-style miner groups lines into templates (a 15,687-line Maven
+   log becomes 291 templates in about 0.15 s), so the tool knows which lines are the 8,000th
+   copy of a progress bar and which line is unique.
+3. **Select.** Score each line from weighted signals (exceptions, `Caused by`, compiler
    errors, test failures, OOM kills, refused connections, `MISSING`, "cannot", "invalid")
    with negatives for lines that only look like errors (`Failures: 0, Errors: 0`, `-Werror`)
-   and build-tool boilerplate. Lines in the failed step count more; WARN/INFO lines,
-   repeated templates and stack frames count less. Windows around the best lines become
-   blocks, the tail of every failed step is always a candidate, and blocks are chosen under
-   a token budget, skipping blocks that repeat evidence already chosen.
-3. **Diagnose.** The model sees only the excerpt, fenced as untrusted data, and must answer
+   and build-tool boilerplate. Lines in the failed step count more; WARN/INFO lines, weak
+   lines with very common templates, and stack frames count less. Windows around the best
+   lines (inside their step) become blocks, the tail of every failed step is always a
+   candidate, runs of same-template filler are folded into one line plus a count, and
+   blocks are chosen under a token budget, skipping blocks whose evidence templates were
+   already chosen. Optionally (`--embedder ollama|openai|auto`), blocks are re-ranked by
+   embedding similarity to common failure modes and to the failed step's symptom; this is
+   off by default because it did not help on the labelled logs so far (see
+   [docs/PROGRESS.md](docs/PROGRESS.md)).
+4. **Diagnose.** The model sees only the excerpt, fenced as untrusted data, and must answer
    in a fixed schema. Malformed answers get one repair round trip with the exact error.
-4. **Verify.** Each citation must point at a line the model was shown and match its text. A
+5. **Verify.** Each citation must point at a line the model was shown and match its text. A
    wrong line number with a unique verbatim match is corrected and flagged; anything else
    is dropped and counted.
 
@@ -170,9 +184,11 @@ labelled with the root-cause line(s); a test enforces that selection keeps those
 
 ## Limitations (today)
 
-- Selection is heuristic only; embedding ranking and template mining arrive on day 2, and
-  there is no evaluation on a public dataset yet (day 3). Six hand-labelled logs are a
-  smoke test, not a benchmark.
+- There is no evaluation on a public dataset yet (day 3). Six hand-labelled logs are a
+  smoke test, not a benchmark, and the day 2 selection changes were developed on those
+  same six logs, so they may be overfitted to them until the LogChunks eval says otherwise.
+- Embedding re-ranking exists but is off by default: with `nomic-embed-text` it did not
+  improve ranking on the labelled logs.
 - Token counts are estimates (3.5 characters per token), not tokenizer-exact.
 - GitHub Actions URLs only; GitLab logs work as files or stdin.
 - Secrets are not yet redacted before the prompt (day 4). GitHub masks registered secrets

@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Drain-style template mining; selection dampens weak repeated lines, judges block
+  novelty by template and folds runs of same-template lines into one line plus a count.
+- Optional embedding re-ranking of candidate blocks (`--embedder`, off by default) with
+  Ollama, OpenAI or any OpenAI-compatible embeddings endpoint.
+- On-disk cache for verified briefs and embedding vectors (`--no-cache`,
+  `CI_PINPOINT_CACHE_DIR`).
+- Long lines are clipped in excerpts; windows stay inside their step.
 - `ci-pinpoint explain` for log files (plain or gzip), stdin and GitHub Actions
   run/attempt/job URLs, with text, Markdown and JSON output and `--no-llm`.
 - Log normaliser for GitHub Actions and GitLab logs (timestamps, ANSI, groups,
@@ -27,3 +34,4 @@ All notable changes to this project are documented here. The format follows
   more than eight citations no longer fail validation.
 - A reply cut off at the output limit is reported as such instead of an inner
   object being parsed as the answer.
+- Raw-log token estimates no longer count clipped line lengths.
