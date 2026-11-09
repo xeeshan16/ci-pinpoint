@@ -71,6 +71,15 @@ class ScoredLine:
 
 
 @dataclass(frozen=True, slots=True)
+class Elision:
+    """``count`` lines after line ``after`` were folded because they share ``template``."""
+
+    after: int
+    count: int
+    template: str
+
+
+@dataclass(frozen=True, slots=True)
 class Block:
     """A contiguous range of lines that is a candidate explanation for the failure."""
 
@@ -79,6 +88,7 @@ class Block:
     score: float
     signals: tuple[str, ...]
     lines: tuple[LogLine, ...] = field(repr=False)
+    elided: tuple[Elision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,12 +186,19 @@ class DiagnosisResult(BaseModel):
         return bool(self.citations)
 
 
+class ElisionOut(BaseModel):
+    after: int
+    count: int
+    template: str
+
+
 class ExcerptBlockOut(BaseModel):
     start: int
     end: int
     score: float
     signals: list[str]
     lines: list[tuple[int, str]]
+    elided: list[ElisionOut] = Field(default_factory=list)
 
 
 class LogStats(BaseModel):
@@ -213,3 +230,7 @@ class Brief(BaseModel):
     excerpt: list[ExcerptBlockOut]
     diagnosis: DiagnosisResult | None
     error: str | None = None
+    ranked_with: str | None = Field(
+        default=None, description="Embedding model that re-ranked the blocks, if any."
+    )
+    cached: bool = False

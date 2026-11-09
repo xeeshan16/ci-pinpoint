@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from ci_pinpoint.heuristics import build_excerpt, score_lines, score_text, template
+from ci_pinpoint.heuristics import build_excerpt, score_lines, score_text
 from ci_pinpoint.normalize import normalize
-from ci_pinpoint.tokens import estimate_lines_tokens, estimate_tokens
+from ci_pinpoint.tokens import (
+    clip_line,
+    estimate_line_tokens,
+    estimate_lines_tokens,
+    estimate_tokens,
+)
 
 from .conftest import RealCase
 
@@ -51,16 +56,54 @@ def test_warning_level_is_dampened() -> None:
     assert logged < fatal
 
 
-def test_template_masks_numbers_hashes_and_quotes() -> None:
-    assert template("Took 12.5 s for 'abc' at 3f2a9b1c") == template(
-        "Took 3 s for 'x' at 9a8b7c6d5"
-    )
-
-
 def test_tokens() -> None:
     assert estimate_tokens("") == 0
     assert estimate_tokens("abcdefg") == 2
     assert estimate_lines_tokens(["abc", ""]) == 1 + 3 + 0 + 3
+    assert clip_line("x" * 450) == "x" * 400 + " … [+50 chars]"
+    assert estimate_line_tokens("x" * 10_000) < 130  # long lines are clipped, not paid in full
+
+
+def test_runs_of_same_template_lines_are_folded() -> None:
+    lines = [f"Progress ({i}): {i * 4} kB" for i in range(40)]
+    text = "\n".join(
+        [
+            "##[group]Run mvn verify",
+            "##[endgroup]",
+            *lines,
+            "error: compilation failed",
+            "##[error]Process completed with exit code 1.",
+        ]
+    )
+    excerpt = build_excerpt(normalize(text), budget=2000)
+    elided = [e for block in excerpt.blocks for e in block.elided]
+    shown = [line.text for block in excerpt.blocks for line in block.lines]
+    assert elided
+    assert elided[0].template == "Progress (<*>): <*> kB"
+    assert sum(1 for t in shown if t.startswith("Progress")) < 5
+    assert "error: compilation failed" in shown
+
+
+def test_evidence_lines_are_never_folded() -> None:
+    text = "\n".join([f"FAILED tests/test_{i}.py::test_x - AssertionError" for i in range(6)])
+    excerpt = build_excerpt(normalize(text), budget=2000)
+    assert not [e for block in excerpt.blocks for e in block.elided]
+
+
+def test_a_long_root_cause_line_fits_a_tight_budget() -> None:
+    """Seen on a real Kafka log: the cause is one 600-char ##[error] line."""
+    cause = "Exception in thread main: requirement failed: advertised.listeners " + "x" * 600
+    text = "\n".join(
+        [
+            "##[group]Run tests",
+            "##[endgroup]",
+            *(f"ok {i}" for i in range(50)),
+            f"##[error]{cause}",
+            "##[error]Process completed with exit code 1.",
+        ]
+    )
+    excerpt = build_excerpt(normalize(text), budget=200)
+    assert any("advertised.listeners" in line.text for b in excerpt.blocks for line in b.lines)
 
 
 def test_failed_step_tail_is_selected_even_without_error_words() -> None:
@@ -112,7 +155,7 @@ def test_empty_log_gives_empty_excerpt() -> None:
     assert excerpt.tokens == 0
 
 
-@pytest.mark.parametrize("budget", [800, 2000, 4000])
+@pytest.mark.parametrize("budget", [200, 400, 800, 2000, 4000])
 def test_real_logs_root_cause_is_in_the_excerpt(real_case: RealCase, budget: int) -> None:
     """On real failed GitHub Actions jobs, every labelled root-cause line survives selection."""
     log = normalize(real_case.text())

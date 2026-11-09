@@ -1,4 +1,4 @@
-"""Stage 1: cheap, explainable candidate selection.
+"""Stage 1: cheap, explainable candidate selection (no model needed).
 
 Every line gets a score from weighted signals (exceptions, ``Caused by:``,
 compiler errors, test failures, OOM kills, refused connections, "cannot" /
@@ -8,12 +8,17 @@ compiler errors, test failures, OOM kills, refused connections, "cannot" /
   ``-Werror``, ``error_type="none"``),
 * the section the line sits in (the step that emitted ``##[error]`` counts more,
   runner setup and cleanup count less),
-* stack-frame dampening, so frames are context rather than evidence.
+* stack-frame dampening, so frames are context rather than evidence,
+* template rarity (see :mod:`ci_pinpoint.templates`): weak lines whose template
+  repeats hundreds of times are dampened; strong lines are not, because the same
+  ``Caused by`` under 19 failing tests is a common cause, not noise.
 
-High-scoring lines seed windows that are merged into blocks, and the tail of
-every failed step becomes a block too. Blocks are then chosen greedily under a
-token budget, skipping blocks whose evidence repeats what is already chosen
-(a Spring context failure can repeat the same ``Caused by`` 20 times).
+High-scoring lines seed windows inside their section, windows merge into
+blocks, and the tail of every failed step becomes a block too. Runs of
+same-template lines inside a block are folded into one line plus a count.
+Blocks are then chosen greedily under a token budget, skipping blocks whose
+evidence templates repeat what is already chosen. An optional ranker (see
+:mod:`ci_pinpoint.ranking`) can re-score blocks before selection.
 
 This stage needs no model. It is also the "heuristics only" baseline in the eval.
 """
@@ -22,12 +27,13 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Protocol
 
 from ci_pinpoint.models import (
     Block,
+    Elision,
     Excerpt,
     LineKind,
     LogLine,
@@ -35,6 +41,7 @@ from ci_pinpoint.models import (
     ScoredLine,
     Section,
 )
+from ci_pinpoint.templates import TemplateIndex, mine
 from ci_pinpoint.tokens import estimate_line_tokens
 
 
@@ -143,21 +150,7 @@ MAX_FRAMES_KEPT = 3
 MAX_BLOCK_LINES = 60
 MAX_BLOCK_SHARE = 0.4  # no single block may take more than this share of the budget
 MIN_NOVELTY = 0.5  # a block must bring at least this share of new evidence templates
-
-_TEMPLATE_SUBS = (
-    (re.compile(r"0x[0-9a-f]+|\b[0-9a-f]{7,}\b", re.IGNORECASE), "#"),
-    (re.compile(r"\d+(?:\.\d+)*"), "0"),
-    (re.compile(r"'[^']*'|\"[^\"]*\""), "Q"),
-    (re.compile(r"\s+"), " "),
-)
-
-
-def template(text: str) -> str:
-    """A coarse template used to spot repeated lines (numbers, hashes and quotes masked)."""
-    out = text.strip().lower()
-    for pattern, repl in _TEMPLATE_SUBS:
-        out = pattern.sub(repl, out)
-    return out
+MIN_RUN = 3  # fold runs of at least this many same-template lines
 
 
 def score_text(text: str) -> tuple[float, tuple[str, ...]]:
@@ -199,21 +192,37 @@ def _section_factor(section: Section) -> float:
 
 
 def _rarity(count: int) -> float:
-    """Dampen lines whose template repeats: the 40th identical warning is noise."""
+    """Dampen lines whose template repeats: the 400th progress line is noise."""
     return 1.0 / (1.0 + 0.3 * math.log(count)) if count > 1 else 1.0
 
 
-def score_lines(log: NormalizedLog) -> list[ScoredLine]:
+@dataclass(frozen=True, slots=True)
+class LogContext:
+    """Everything selection needs to know about one log, computed once."""
+
+    log: NormalizedLog
+    index: TemplateIndex
+    scored: dict[int, ScoredLine]
+    ordered: tuple[ScoredLine, ...]
+
+    def cluster(self, line_no: int) -> int:
+        return self.index.cluster_of.get(line_no, -1)
+
+    def is_seed(self, line_no: int) -> bool:
+        return self.scored[line_no].score >= SEED_THRESHOLD
+
+
+def score_lines(log: NormalizedLog, index: TemplateIndex | None = None) -> list[ScoredLine]:
+    index = index or mine((line.no, line.text) for line in log.lines)
     sections = {s.index: s for s in log.sections}
-    templates = Counter(template(line.text) for line in log.lines if line.text.strip())
     scored: list[ScoredLine] = []
     for line in log.lines:
         if line.kind in (LineKind.GROUP, LineKind.ENDGROUP):
             scored.append(ScoredLine(line, 0.0, ()))
             continue
         score, names = score_text(line.text)
-        if score > 0:
-            score *= _rarity(templates[template(line.text)])
+        if 0 < score < SEED_THRESHOLD:
+            score *= _rarity(index.size_of(line.no))
         if line.kind is LineKind.COMMAND:
             # The script GitHub echoes before running a step: it may say "error",
             # but it is the command, not what happened.
@@ -230,6 +239,12 @@ def score_lines(log: NormalizedLog) -> list[ScoredLine]:
         score *= _section_factor(sections[line.section])
         scored.append(ScoredLine(line, round(score, 3), names))
     return scored
+
+
+def analyse(log: NormalizedLog) -> LogContext:
+    index = mine((line.no, line.text) for line in log.lines)
+    ordered = tuple(score_lines(log, index))
+    return LogContext(log, index, {s.line.no: s for s in ordered}, ordered)
 
 
 def _compact_frames(lines: Sequence[LogLine]) -> tuple[LogLine, ...]:
@@ -255,11 +270,40 @@ def _compact_frames(lines: Sequence[LogLine]) -> tuple[LogLine, ...]:
     return tuple(out)
 
 
+def _collapse_runs(
+    lines: Sequence[LogLine], ctx: LogContext
+) -> tuple[tuple[LogLine, ...], tuple[Elision, ...]]:
+    """Fold runs of adjacent same-template, non-evidence lines into their first line."""
+    kept: list[LogLine] = []
+    elided: list[Elision] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        cid = ctx.cluster(line.no)
+        j = i + 1
+        if cid >= 0 and not ctx.is_seed(line.no):
+            while (
+                j < len(lines)
+                and lines[j].no == lines[j - 1].no + 1
+                and ctx.cluster(lines[j].no) == cid
+                and not ctx.is_seed(lines[j].no)
+            ):
+                j += 1
+        kept.append(line)
+        if j - i >= MIN_RUN:
+            elided.append(Elision(line.no, j - i - 1, ctx.index.templates[cid]))
+        else:
+            kept.extend(lines[i + 1 : j])
+        i = j
+    return tuple(kept), tuple(elided)
+
+
 def _make_block(
-    lines: Sequence[LogLine], scored: dict[int, ScoredLine], prior: float = 0.0, tag: str = ""
+    lines: Sequence[LogLine], ctx: LogContext, prior: float = 0.0, tag: str = ""
 ) -> Block:
-    kept = tuple(line for line in _compact_frames(lines) if line.kind is not LineKind.ENDGROUP)
-    seeds = [scored[line.no] for line in kept if scored[line.no].score >= SEED_THRESHOLD]
+    compact = [line for line in _compact_frames(lines) if line.kind is not LineKind.ENDGROUP]
+    kept, elided = _collapse_runs(compact, ctx)
+    seeds = [ctx.scored[line.no] for line in kept if ctx.is_seed(line.no)]
     best = max((s.score for s in seeds), default=0.0)
     score = max(best + min(2.0, 0.25 * max(0, len(seeds) - 1)), prior)
     signals = sorted({name for s in seeds for name in s.signals} | ({tag} if tag else set()))
@@ -269,99 +313,120 @@ def _make_block(
         score=round(score, 3),
         signals=tuple(signals),
         lines=kept,
+        elided=elided,
     )
 
 
-def candidate_blocks(log: NormalizedLog, scored_lines: Sequence[ScoredLine]) -> list[Block]:
-    """Merge windows around high-scoring lines into blocks, plus failed-step tails."""
-    scored = {s.line.no: s for s in scored_lines}
+def candidate_blocks(ctx: LogContext) -> list[Block]:
+    """Windows around high-scoring lines (never crossing a section boundary),
+    merged into blocks, plus the tail of every failed step."""
+    log = ctx.log
     index_of = {line.no: i for i, line in enumerate(log.lines)}
-    n = len(log.lines)
+    bounds = {
+        s.index: (index_of.get(s.first_line, 0), index_of.get(s.last_line, len(log.lines) - 1))
+        for s in log.sections
+    }
 
-    windows: list[tuple[int, int]] = []
-    for i, s in enumerate(scored_lines):
+    windows: list[tuple[int, int, int]] = []
+    for i, s in enumerate(ctx.ordered):
         if s.score >= SEED_THRESHOLD:
-            windows.append((max(0, i - CONTEXT_BEFORE), min(n - 1, i + CONTEXT_AFTER)))
-    merged: list[tuple[int, int]] = []
-    for lo, hi in windows:
-        if merged and lo <= merged[-1][1] + MERGE_GAP:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            first, last = bounds[s.line.section]
+            windows.append(
+                (max(first, i - CONTEXT_BEFORE), min(last, i + CONTEXT_AFTER), s.line.section)
+            )
+    merged: list[tuple[int, int, int]] = []
+    for lo, hi, sec in windows:
+        if merged and merged[-1][2] == sec and lo <= merged[-1][1] + MERGE_GAP:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi), sec)
         else:
-            merged.append((lo, hi))
+            merged.append((lo, hi, sec))
 
     blocks: list[Block] = []
-    for lo, hi in merged:
+    for lo, hi, _ in merged:
         for start in range(lo, hi + 1, MAX_BLOCK_LINES):
             chunk = log.lines[start : min(hi, start + MAX_BLOCK_LINES - 1) + 1]
-            blocks.append(_make_block(chunk, scored))
+            blocks.append(_make_block(chunk, ctx))
 
     # The last lines of every step that emitted ##[error] are the strongest prior
     # there is, even when they don't contain a single error word.
     for section in log.sections:
         if not section.has_error:
             continue
+        first, last = bounds[section.index]
+        span = log.lines[first : last + 1]
         members = [
             line
-            for line in log.lines[index_of[section.first_line] : index_of[section.last_line] + 1]
+            for line in span
             if line.kind is LineKind.TEXT
             and line.text.strip()
             and not BOILERPLATE.search(line.text)
         ]
         if not members:
             continue
-        annotations = [
-            line
-            for line in log.lines[index_of[section.first_line] : index_of[section.last_line] + 1]
-            if line.kind is LineKind.ERROR_ANNOTATION
-        ]
+        annotations = [line for line in span if line.kind is LineKind.ERROR_ANNOTATION]
         tail = members[-TAIL_LINES:]
         if annotations:
             first_annotation = annotations[0].no
             before = [line for line in members if line.no < first_annotation]
             tail = [*before[-TAIL_LINES:], annotations[0]]
-        blocks.append(_make_block(tail, scored, prior=TAIL_PRIOR, tag="failed_step_tail"))
+        blocks.append(_make_block(tail, ctx, prior=TAIL_PRIOR, tag="failed_step_tail"))
     return blocks
 
 
-def _block_tokens(lines: Sequence[LogLine]) -> int:
-    return sum(estimate_line_tokens(line.text) for line in lines)
+def elision_text(elision: Elision) -> str:
+    return f"... {elision.count} more line(s) like: {elision.template}"
 
 
-def _trim_to_budget(block: Block, scored: dict[int, ScoredLine], budget: int) -> Block | None:
+def block_tokens(block: Block) -> int:
+    return sum(estimate_line_tokens(line.text) for line in block.lines) + sum(
+        estimate_line_tokens(elision_text(e)) for e in block.elided
+    )
+
+
+def _restrict(block: Block, lines: Sequence[LogLine]) -> Block:
+    keep = {line.no for line in lines}
+    return replace(
+        block,
+        start=lines[0].no,
+        end=lines[-1].no,
+        lines=tuple(lines),
+        elided=tuple(e for e in block.elided if e.after in keep),
+    )
+
+
+def _trim_to_budget(block: Block, ctx: LogContext, budget: int) -> Block | None:
     """Shrink a block around its best line until it fits ``budget`` tokens."""
     if not block.lines or budget <= 0:
         return None
-    best = max(range(len(block.lines)), key=lambda i: scored[block.lines[i].no].score)
+    best = max(range(len(block.lines)), key=lambda i: ctx.scored[block.lines[i].no].score)
     lo = hi = best
-    used = estimate_line_tokens(block.lines[best].text)
-    if used > budget:
+    if block_tokens(_restrict(block, block.lines[best : best + 1])) > budget:
         return None
-    while True:
+    grew = True
+    while grew:
         grew = False
-        for candidate in (hi + 1, lo - 1):
-            if 0 <= candidate < len(block.lines) and (candidate > hi or candidate < lo):
-                cost = estimate_line_tokens(block.lines[candidate].text)
-                if used + cost <= budget:
-                    used += cost
-                    lo, hi = min(lo, candidate), max(hi, candidate)
-                    grew = True
-        if not grew:
-            break
-    kept = block.lines[lo : hi + 1]
-    return Block(kept[0].no, kept[-1].no, block.score, block.signals, kept)
+        for new_lo, new_hi in ((lo, hi + 1), (lo - 1, hi)):
+            if new_lo >= 0 and new_hi < len(block.lines):
+                candidate = _restrict(block, block.lines[new_lo : new_hi + 1])
+                if block_tokens(candidate) <= budget:
+                    lo, hi, grew = new_lo, new_hi, True
+    return _restrict(block, block.lines[lo : hi + 1])
 
 
-def select_blocks(
-    blocks: Sequence[Block], scored_lines: Sequence[ScoredLine], budget: int
-) -> Excerpt:
+class BlockRanker(Protocol):
+    """Re-scores candidate blocks before selection (see :mod:`ci_pinpoint.ranking`)."""
+
+    def rank(self, blocks: Sequence[Block], ctx: LogContext) -> list[Block]: ...
+
+
+def select_blocks(blocks: Sequence[Block], ctx: LogContext, budget: int) -> Excerpt:
     """Greedy, diversity-aware selection of blocks under a token budget."""
-    scored = {s.line.no: s for s in scored_lines}
     # Failed-step tails go first: they are cheap and orient the reader (and the
     # model) even when the cause is elsewhere. Then the rest by score.
     ordered = sorted(blocks, key=lambda b: ("failed_step_tail" not in b.signals, -b.score, -b.end))
     chosen: list[Block] = []
     covered_lines: set[int] = set()
-    covered_templates: set[str] = set()
+    covered_templates: set[int] = set()
     used = 0
     for block in ordered:
         remaining = budget - used
@@ -370,34 +435,36 @@ def select_blocks(
         fresh = tuple(line for line in block.lines if line.no not in covered_lines)
         if not fresh:
             continue
-        evidence = {
-            template(line.text) for line in fresh if scored[line.no].score >= SEED_THRESHOLD
-        }
+        evidence = {ctx.cluster(line.no) for line in fresh if ctx.is_seed(line.no)}
         if evidence and "failed_step_tail" not in block.signals:
             novelty = len(evidence - covered_templates) / len(evidence)
             if novelty < MIN_NOVELTY:
                 continue  # mostly the same evidence as a block we already have
-        candidate = Block(fresh[0].no, fresh[-1].no, block.score, block.signals, fresh)
-        cost = _block_tokens(candidate.lines)
+        candidate = _restrict(block, fresh)
+        cost = block_tokens(candidate)
         share = TAIL_SHARE if "failed_step_tail" in block.signals else MAX_BLOCK_SHARE
-        limit = min(remaining, max(1, int(budget * share)))
+        # A block may always take its single best line, even past its share.
+        best_line = max(candidate.lines, key=lambda ln: ctx.scored[ln.no].score)
+        floor = block_tokens(_restrict(candidate, [best_line]))
+        limit = min(remaining, max(floor, int(budget * share)))
         if cost > limit:
-            trimmed = _trim_to_budget(candidate, scored, limit)
+            trimmed = _trim_to_budget(candidate, ctx, limit)
             if trimmed is None:
                 continue
-            candidate, cost = trimmed, _block_tokens(trimmed.lines)
+            candidate, cost = trimmed, block_tokens(trimmed)
         chosen.append(candidate)
         used += cost
         covered_lines.update(line.no for line in candidate.lines)
         covered_templates.update(
-            template(line.text)
-            for line in candidate.lines
-            if scored[line.no].score >= SEED_THRESHOLD
+            ctx.cluster(line.no) for line in candidate.lines if ctx.is_seed(line.no)
         )
     chosen.sort(key=lambda b: b.start)
     return Excerpt(blocks=tuple(chosen), tokens=used, budget=budget, candidates=len(blocks))
 
 
-def build_excerpt(log: NormalizedLog, budget: int) -> Excerpt:
-    scored = score_lines(log)
-    return select_blocks(candidate_blocks(log, scored), scored, budget)
+def build_excerpt(log: NormalizedLog, budget: int, ranker: BlockRanker | None = None) -> Excerpt:
+    ctx = analyse(log)
+    blocks = candidate_blocks(ctx)
+    if ranker is not None:
+        blocks = ranker.rank(blocks, ctx)
+    return select_blocks(blocks, ctx, budget)

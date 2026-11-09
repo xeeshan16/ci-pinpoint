@@ -21,6 +21,7 @@ from ci_pinpoint.models import (
     RejectedCitation,
     VerifiedCitation,
 )
+from ci_pinpoint.tokens import CLIP_MARKER
 
 _WS = re.compile(r"\s+")
 _PREFIX = re.compile(r"^\s*L\d+:\s?")
@@ -29,7 +30,8 @@ MIN_RATIO = 0.85
 
 
 def _norm(text: str) -> str:
-    return _WS.sub(" ", _PREFIX.sub("", text)).strip().lower()
+    text = CLIP_MARKER.sub("", _PREFIX.sub("", text))
+    return _WS.sub(" ", text).strip().lower()
 
 
 def text_matches(cited: str, actual: str) -> bool:

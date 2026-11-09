@@ -29,11 +29,16 @@ def _excerpt_lines(brief: Brief) -> list[str]:
     out: list[str] = []
     previous: int | None = None
     for block in brief.excerpt:
+        folded = {e.after: e for e in block.elided}
         for no, text in block.lines:
             if previous is not None and no != previous + 1:
                 out.append("    …")
             out.append(f"L{no:<6} {_clip(text)}")
             previous = no
+            if no in folded:
+                e = folded[no]
+                out.append(f"{'':7} … {e.count} more line(s) like: {_clip(e.template, 160)}")
+                previous = no + e.count
     return out
 
 
@@ -43,10 +48,15 @@ def _title(brief: Brief) -> str:
 
 def _reduction(brief: Brief) -> str:
     s = brief.stats
-    return (
+    text = (
         f"{s.excerpt_tokens:,} of ~{s.raw_tokens:,} tokens "
         f"({s.reduction:.1%} smaller), {len(brief.excerpt)} block(s)"
     )
+    if brief.ranked_with:
+        text += f", ranked with {brief.ranked_with}"
+    if brief.cached:
+        text += ", from cache"
+    return text
 
 
 def render_text(brief: Brief, *, show_excerpt: bool = False) -> str:
