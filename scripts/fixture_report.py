@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from ci_pinpoint.config import load_settings
+from ci_pinpoint.logging_setup import configure
 from ci_pinpoint.models import RawLog
 from ci_pinpoint.pipeline import explain
 from ci_pinpoint.providers import build_chat
@@ -42,6 +43,7 @@ def main() -> int:
         help="exit 1 unless every case cites a labelled root-cause line",
     )
     args = parser.parse_args()
+    configure(1, os.environ)  # warnings and info (incl. unparseable replies) to stderr
 
     settings = load_settings(
         overrides={"provider": args.provider, "model": args.model, "budget_tokens": args.budget}

@@ -321,3 +321,46 @@ def test_build_embedder_variants() -> None:
     assert custom.model == "bge"
     with pytest.raises(ConfigError, match="unknown embedding provider"):
         build_embedder(Settings(), {"CI_PINPOINT_EMBED_PROVIDER": "nope"})
+
+
+SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_json_schema_is_sent_as_structured_output() -> None:
+    seen: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=_openai_body())
+
+    chat = OpenAICompatibleChat(base_url="http://x/v1", model="m", http=_client(handler))
+    chat.complete(MSGS, json_mode=True, json_schema=SCHEMA)
+    response_format = seen[0]["response_format"]
+    assert isinstance(response_format, dict)
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["schema"] == SCHEMA
+
+
+def test_rejected_json_schema_falls_back_to_json_mode_once() -> None:
+    formats: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        kind = json.loads(request.content)["response_format"]["type"]
+        formats.append(kind)
+        if kind == "json_schema":
+            return httpx.Response(400, json={"error": {"message": "response_format not supported"}})
+        return httpx.Response(200, json=_openai_body())
+
+    chat = OpenAICompatibleChat(base_url="http://x/v1", model="m", http=_client(handler))
+    chat.complete(MSGS, json_schema=SCHEMA)
+    chat.complete(MSGS, json_schema=SCHEMA)
+    assert formats == ["json_schema", "json_object", "json_object"]
+
+
+def test_other_errors_do_not_trigger_the_fallback() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "bad key"}})
+
+    chat = OpenAICompatibleChat(base_url="http://x/v1", model="m", http=_client(handler))
+    with pytest.raises(ProviderError, match="401"):
+        chat.complete(MSGS, json_schema=SCHEMA)

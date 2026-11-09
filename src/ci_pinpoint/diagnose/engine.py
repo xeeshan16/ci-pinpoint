@@ -7,7 +7,7 @@ import time
 
 from ci_pinpoint.diagnose.citations import verify_citations
 from ci_pinpoint.diagnose.parse import DiagnosisParseError, parse_diagnosis
-from ci_pinpoint.diagnose.prompt import build_messages, repair_message
+from ci_pinpoint.diagnose.prompt import DIAGNOSIS_SCHEMA, build_messages, repair_message
 from ci_pinpoint.models import DiagnosisResult, Excerpt, NormalizedLog, TokenUsage
 from ci_pinpoint.providers.base import ChatModel, Message
 
@@ -40,7 +40,11 @@ def diagnose(
     model_name = chat.model
     for attempt in range(1, repair_attempts + 2):
         completion = chat.complete(
-            messages, max_tokens=max_output_tokens, temperature=0.0, json_mode=True
+            messages,
+            max_tokens=max_output_tokens,
+            temperature=0.0,
+            json_mode=True,
+            json_schema=DIAGNOSIS_SCHEMA,
         )
         usage = usage + completion.usage
         model_name = completion.model
@@ -48,6 +52,10 @@ def diagnose(
             diagnosis = parse_diagnosis(completion.text)
         except DiagnosisParseError as exc:
             last_error = str(exc)
+            log.warning(
+                "model reply did not parse",
+                extra={"attempt": attempt, "error": last_error, "reply": completion.text[:600]},
+            )
         else:
             verified, rejected = verify_citations(diagnosis.citations, lines, shown)
             if verified or attempt > repair_attempts:

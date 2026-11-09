@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ci_pinpoint.models import TokenUsage
@@ -42,6 +42,7 @@ class AnthropicChat:
         max_tokens: int = 1024,
         temperature: float = 0.0,
         json_mode: bool = False,
+        json_schema: Mapping[str, Any] | None = None,
     ) -> Completion:
         system = "\n\n".join(m.content for m in messages if m.role == "system")
         if json_mode:

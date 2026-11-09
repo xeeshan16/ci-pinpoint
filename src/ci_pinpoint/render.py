@@ -15,6 +15,10 @@ def _clip(text: str, limit: int = MAX_LINE_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _confidence(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}"
+
+
 def _md_code(text: str) -> str:
     """Inline code that survives backticks in the log line."""
     fence = "``" if "`" in text else "`"
@@ -59,7 +63,7 @@ def render_text(brief: Brief, *, show_excerpt: bool = False) -> str:
             f"  {diag.summary}",
             "",
             f"  category    {diag.category.value}",
-            f"  confidence  {diag.confidence:.2f}",
+            f"  confidence  {_confidence(diag.confidence)}",
             f"  model       {d.provider}/{d.model}"
             + ("  (FAKE PROVIDER: not a real diagnosis)" if d.provider == "fake" else ""),
             "",
@@ -105,7 +109,7 @@ def render_markdown(brief: Brief, *, show_excerpt: bool = True) -> str:
             "",
             f"**{diag.summary}**",
             "",
-            f"`{diag.category.value}` · confidence {diag.confidence:.2f} · "
+            f"`{diag.category.value}` · confidence {_confidence(diag.confidence)} · "
             f"`{d.provider}/{d.model}`{fake}",
             "",
             "**Root cause.** " + diag.root_cause,

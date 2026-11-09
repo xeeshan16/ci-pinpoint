@@ -129,7 +129,7 @@ class Diagnosis(BaseModel):
     root_cause: str = Field(min_length=1, max_length=2000)
     citations: list[Citation] = Field(min_length=1, max_length=8)
     suggested_fix: str = Field(min_length=1, max_length=2000)
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class CitationStatus(StrEnum):

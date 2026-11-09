@@ -6,13 +6,16 @@ so one implementation covers hosted and local models.
 
 from __future__ import annotations
 
+import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ci_pinpoint.models import TokenUsage
 from ci_pinpoint.providers.base import Completion, Message, ProviderError
 from ci_pinpoint.providers.http import JsonHttpClient
+
+log = logging.getLogger(__name__)
 
 
 def _usage(data: dict[str, Any]) -> TokenUsage:
@@ -42,6 +45,8 @@ class OpenAICompatibleChat:
         self._provider = provider
         self._http = http or JsonHttpClient()
         self._extra_headers = extra_headers or {}
+        # Flipped off the first time a server rejects json_schema response formats.
+        self._schema_supported = True
 
     @property
     def provider(self) -> str:
@@ -63,6 +68,15 @@ class OpenAICompatibleChat:
     def _params(self) -> dict[str, str] | None:
         return None
 
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._http.post_json(
+            self._url(),
+            payload,
+            headers=self._headers(),
+            params=self._params(),
+            what=f"{self._provider} chat ({self._model})",
+        )
+
     def complete(
         self,
         messages: Sequence[Message],
@@ -70,6 +84,7 @@ class OpenAICompatibleChat:
         max_tokens: int = 1024,
         temperature: float = 0.0,
         json_mode: bool = False,
+        json_schema: Mapping[str, Any] | None = None,
     ) -> Completion:
         payload: dict[str, Any] = {
             "model": self._model,
@@ -77,16 +92,32 @@ class OpenAICompatibleChat:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        if json_mode:
+        use_schema = json_schema is not None and self._schema_supported
+        if use_schema:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "strict": True,
+                    "schema": dict(json_schema or {}),
+                },
+            }
+        elif json_mode or json_schema is not None:
             payload["response_format"] = {"type": "json_object"}
         started = time.perf_counter()
-        data = self._http.post_json(
-            self._url(),
-            payload,
-            headers=self._headers(),
-            params=self._params(),
-            what=f"{self._provider} chat ({self._model})",
-        )
+        try:
+            data = self._post(payload)
+        except ProviderError as exc:
+            if not (use_schema and exc.status in (400, 422)):
+                raise
+            # Older servers and some gateways reject json_schema: fall back to JSON mode.
+            log.info(
+                "server rejected json_schema, falling back to json_object",
+                extra={"provider": self._provider, "error": str(exc)},
+            )
+            self._schema_supported = False
+            payload["response_format"] = {"type": "json_object"}
+            data = self._post(payload)
         latency = time.perf_counter() - started
         try:
             choice = data["choices"][0]

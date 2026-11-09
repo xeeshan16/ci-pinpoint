@@ -6,9 +6,9 @@ provider means adding one class and one branch in :mod:`.factory`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from ci_pinpoint.models import TokenUsage
 
@@ -56,7 +56,12 @@ class ChatModel(Protocol):
         max_tokens: int = 1024,
         temperature: float = 0.0,
         json_mode: bool = False,
-    ) -> Completion: ...
+        json_schema: Mapping[str, Any] | None = None,
+    ) -> Completion:
+        """Send ``messages``. ``json_mode`` asks for a JSON object; ``json_schema``
+        (a JSON Schema for that object) asks for constrained decoding where the
+        provider supports it and is otherwise only a hint."""
+        ...
 
 
 @runtime_checkable

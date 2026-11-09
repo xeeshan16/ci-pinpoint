@@ -196,3 +196,61 @@ def test_fake_chat_cites_real_root_causes(real_case: RealCase) -> None:
     assert not result.rejected_citations
     assert result.provider == "fake"
     assert result.diagnosis.summary.startswith("[fake provider]")
+
+
+def test_parse_flattens_nested_small_model_output() -> None:
+    """Shapes seen from small local models: fields nested under root_cause, string
+    citations, list-valued fixes and missing confidence."""
+    reply = json.dumps(
+        {
+            "category": "configuration",
+            "summary": "Kafka refused the listener config",
+            "root_cause": {
+                "description": "advertised.listeners uses 0.0.0.0",
+                "citations": [
+                    "L512: Exception in thread main",
+                    {"line_number": "L513", "content": "x"},
+                ],
+            },
+            "suggested_fix": ["Use a routable host", "Re-run the job"],
+        }
+    )
+    d = parse_diagnosis(reply)
+    assert d.root_cause == "advertised.listeners uses 0.0.0.0"
+    assert [(c.line, c.text) for c in d.citations] == [
+        (512, "Exception in thread main"),
+        (513, "x"),
+    ]
+    assert d.suggested_fix == "- Use a routable host\n- Re-run the job"
+    assert d.confidence is None
+
+
+def test_parse_accepts_evidence_alias_and_fills_summary() -> None:
+    d = parse_diagnosis(
+        json.dumps(
+            {
+                "category": "test",
+                "root_cause": {"explanation": "Two metrics are missing\nmore detail"},
+                "evidence": [{"line": 7, "text": "MISSING gen_ai_request_model"}],
+                "suggested_fix": "Export them",
+                "confidence": True,
+            }
+        )
+    )
+    assert d.summary == "Two metrics are missing"
+    assert d.citations[0].line == 7
+
+
+def test_diagnose_sends_the_schema() -> None:
+    chat = ScriptedChat([_reply()])
+    _run(chat)
+    schema = chat.schemas[0]
+    assert schema is not None
+    assert schema["required"] == [
+        "category",
+        "summary",
+        "root_cause",
+        "citations",
+        "suggested_fix",
+        "confidence",
+    ]

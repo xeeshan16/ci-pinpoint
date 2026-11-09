@@ -7,7 +7,32 @@ import json
 from ci_pinpoint.models import Excerpt, FailureCategory
 from ci_pinpoint.providers.base import Message
 
-PROMPT_VERSION = "diagnose-v1"
+PROMPT_VERSION = "diagnose-v2"
+
+# Sent as a structured-output schema to providers that support constrained
+# decoding (OpenAI, Azure, Ollama, vLLM). Kept to the subset of JSON Schema
+# that strict mode accepts; length and range limits are enforced by pydantic.
+DIAGNOSIS_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "category": {"type": "string", "enum": [c.value for c in FailureCategory]},
+        "summary": {"type": "string"},
+        "root_cause": {"type": "string"},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"line": {"type": "integer"}, "text": {"type": "string"}},
+                "required": ["line", "text"],
+            },
+        },
+        "suggested_fix": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["category", "summary", "root_cause", "citations", "suggested_fix", "confidence"],
+}
 
 _SCHEMA_HINT = {
     "category": " | ".join(c.value for c in FailureCategory),
@@ -31,7 +56,8 @@ How to read the excerpt:
   Look for the earliest line that explains it: the deepest "Caused by", the first
   compiler error, the failing assertion, the refused connection, the missing value.
 
-Answer with one JSON object and nothing else, with exactly these keys:
+Answer with one flat JSON object and nothing else, with exactly these keys
+(every value is a plain string or number except "citations", which is a list):
 {json.dumps(_SCHEMA_HINT, indent=2)}
 
 Rules for citations:

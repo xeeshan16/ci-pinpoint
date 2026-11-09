@@ -12,7 +12,8 @@ import json
 import math
 import re
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 from ci_pinpoint.heuristics import score_text
 from ci_pinpoint.models import FailureCategory, TokenUsage
@@ -86,6 +87,7 @@ class FakeChat:
         max_tokens: int = 1024,
         temperature: float = 0.0,
         json_mode: bool = False,
+        json_schema: Mapping[str, Any] | None = None,
     ) -> Completion:
         prompt = messages[-1].content if messages else ""
         excerpt = [(int(n), text) for n, text in EXCERPT_LINE.findall(prompt)]
@@ -125,6 +127,7 @@ class ScriptedChat:
         self._responses = deque(responses)
         self._model = model
         self.requests: list[list[Message]] = []
+        self.schemas: list[Mapping[str, Any] | None] = []
 
     @property
     def provider(self) -> str:
@@ -141,8 +144,10 @@ class ScriptedChat:
         max_tokens: int = 1024,
         temperature: float = 0.0,
         json_mode: bool = False,
+        json_schema: Mapping[str, Any] | None = None,
     ) -> Completion:
         self.requests.append(list(messages))
+        self.schemas.append(json_schema)
         if not self._responses:
             raise AssertionError("ScriptedChat ran out of responses")
         text = self._responses.popleft()
