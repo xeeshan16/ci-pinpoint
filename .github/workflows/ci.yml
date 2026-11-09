@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint, format, types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run ruff check --output-format=github .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
+  test:
+    name: tests (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - name: unit and integration tests with coverage
+        env:
+          # The live test downloads a real failed job log from a public repository.
+          CI_PINPOINT_LIVE_GITHUB: ${{ matrix.python == '3.12' && '1' || '' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          uv run pytest --cov --cov-report=term --cov-report=xml:reports/coverage.xml
+          --junitxml=reports/junit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports-${{ matrix.python }}
+          path: reports/
+
+  package:
+    name: build, install, smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - name: install the wheel into a clean environment
+        run: |
+          uv venv /tmp/clean
+          uv pip install --python /tmp/clean/bin/python dist/*.whl
+          /tmp/clean/bin/ci-pinpoint --version
+      - name: explain a real failed job log (fake provider)
+        run: |
+          mkdir -p reports
+          /tmp/clean/bin/ci-pinpoint explain tests/fixtures/logs/smoke-test-missing-metrics.log.gz \
+            --provider fake --format json > reports/smoke.json
+          python3 - <<'PY'
+          import json
+          brief = json.load(open("reports/smoke.json"))
+          assert brief["diagnosis"]["verified"], "no verified citation"
+          assert brief["stats"]["reduction"] > 0.9, brief["stats"]
+          print("ok:", brief["stats"]["excerpt_tokens"], "of", brief["stats"]["raw_tokens"], "tokens")
+          PY
+          gzip -dc tests/fixtures/logs/format-check-diff.log.gz | /tmp/clean/bin/ci-pinpoint explain - --no-llm > reports/stdin.txt
+          grep -q "Code is not formatted" reports/stdin.txt
+      - name: fixture smoke report (fake provider)
+        run: |
+          uv run python scripts/fixture_report.py --provider fake --out reports/fixtures
+          cat reports/fixtures/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: package-and-smoke
+          path: |
+            dist/
+            reports/

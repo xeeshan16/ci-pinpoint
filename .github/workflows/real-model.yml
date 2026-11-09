@@ -1,0 +1,59 @@
+name: real-model
+
+# Runs ci-pinpoint against the labelled real CI logs with a real local model
+# (Ollama on the runner's CPU). Its report is the source of the sample output
+# in the README. Not a required check: model downloads can be slow or flaky.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Ollama model
+        default: qwen2.5:3b
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/fixture_report.py"
+      - "tests/fixtures/logs/**"
+      - ".github/workflows/real-model.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-model-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ollama:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MODEL: ${{ inputs.model || 'qwen2.5:3b' }}
+      CI_PINPOINT_TIMEOUT_S: "900"
+      CI_PINPOINT_MAX_RETRIES: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - name: install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          if ! curl -sf http://localhost:11434/api/tags > /dev/null; then
+            nohup ollama serve > /tmp/ollama.log 2>&1 &
+          fi
+          for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags > /dev/null && break; sleep 1; done
+          ollama --version
+      - run: ollama pull "$MODEL"
+      - name: diagnose the real CI logs
+        run: |
+          uv run python scripts/fixture_report.py --provider ollama --model "$MODEL" --out reports/real-model
+          cat reports/real-model/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-model-report
+          path: reports/
