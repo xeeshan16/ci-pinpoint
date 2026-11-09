@@ -1,0 +1,61 @@
+{
+  "description": "Real, unmodified GitHub Actions job logs from failed CI runs of the public repository xeeshan16/kafka-llm-enricher (MIT). Each case names the root-cause line(s) a reader needs to see: every anchor must appear in the excerpt that ci-pinpoint selects. Labels were written by hand from the full logs.",
+  "license": "MIT (logs produced by xeeshan16/kafka-llm-enricher CI)",
+  "cases": [
+    {
+      "file": "kafka-broker-advertised-listeners.log.gz",
+      "run_url": "https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/39605175086/job/119239402066",
+      "job": "build, static analysis, tests, coverage",
+      "category": "configuration",
+      "anchors": [
+        "advertised.listeners cannot use the nonroutable meta-address 0.0.0.0"
+      ]
+    },
+    {
+      "file": "postgres-connection-refused.log.gz",
+      "run_url": "https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/39784516064/job/119844028663",
+      "job": "build, static analysis, tests, coverage",
+      "category": "infrastructure",
+      "anchors": [
+        "Connection to localhost:5432 refused"
+      ]
+    },
+    {
+      "file": "spring-config-unknown-pii-type.log.gz",
+      "run_url": "https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40196005593/job/121176855639",
+      "job": "build, static analysis, tests, coverage",
+      "category": "configuration",
+      "anchors": [
+        "unknown PII type 'pan,iban,email,phone'"
+      ]
+    },
+    {
+      "file": "smoke-test-missing-metrics.log.gz",
+      "run_url": "https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40330806643/job/121599413328",
+      "job": "docker image, compose demo smoke test",
+      "category": "test",
+      "anchors": [
+        "2 metric(s) queried by the dashboard are not exported",
+        "MISSING              gen_ai_request_model"
+      ]
+    },
+    {
+      "file": "maven-spotless-violations.log.gz",
+      "run_url": "https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40508708933/job/122204625037",
+      "job": "quick start from a clean clone",
+      "category": "lint_format",
+      "anchors": [
+        "The following files had format violations"
+      ]
+    },
+    {
+      "file": "format-check-diff.log.gz",
+      "run_url": "https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40508708933/job/122204625292",
+      "job": "format (google-java-format via Spotless)",
+      "category": "lint_format",
+      "anchors": [
+        "Code is not formatted. Run ./mvnw spotless:apply"
+      ]
+    }
+  ]
+}
