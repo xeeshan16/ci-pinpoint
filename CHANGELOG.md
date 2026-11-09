@@ -15,8 +15,15 @@ All notable changes to this project are documented here. The format follows
   boilerplate filtering, stack-frame compaction and a token budget.
 - Providers: OpenAI-compatible (Ollama, vLLM), OpenAI, Azure OpenAI, Anthropic and
   deterministic fakes for tests; retries with full-jitter backoff and Retry-After.
-- Diagnosis with a fixed JSON schema, one repair round trip, and citation
-  verification against the raw log.
+- Diagnosis with a fixed JSON schema (sent as a structured-output schema where the
+  provider supports it), one repair round trip, and citation verification against
+  the raw log.
 - Six hand-labelled real failed GitHub Actions logs as test fixtures.
 - CI for Python 3.11 to 3.13, a clean-venv package smoke test, and a workflow
   that runs the fixtures through a real Ollama model.
+
+### Fixed
+- Small-model replies with fields nested under `root_cause`, string citations or
+  more than eight citations no longer fail validation.
+- A reply cut off at the output limit is reported as such instead of an inner
+  object being parsed as the answer.

@@ -54,11 +54,33 @@
 - Excerpt size at the default 2,000-token budget, from estimated raw size:
   15,311 → 1,995; 14,839 → 2,000; 161,427 → 1,997; 63,069 → 961; 235,399 → 1,995;
   9,702 → 359 tokens.
-- 125 tests pass locally, coverage 95%.
+- 135 tests pass locally and in CI on Python 3.11 to 3.13 (including a live GitHub
+  API test in CI), coverage 95.6%.
+
+**Real model runs** (Ollama `qwen2.5:3b`, CPU-only GitHub runner, budget 2,000
+tokens, temperature 0, one repair; measured in CI because the build sandbox cannot
+reach a model; six logs, so read these as a smoke test)
+
+| run | change under test | verified diagnosis | labelled root cause cited | category correct |
+|---|---|---|---|---|
+| [42662551838](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42662551838) | first slice, JSON mode | 0/6 | 0/6 | 0/6 |
+| [42664660125](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42664660125) | + json_schema structured output, nested-field lifting | 4/6 | 3/6 | 1/6 |
+| [42667018690](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42667018690) | + cut-off detection, citation clipping, shorter root cause | 5/6 | 4/6 | 1/6 |
+
+What the runs taught us, each fixed in its own commit:
+1. The 3B model nested `citations` and `confidence` inside `root_cause`, so strict
+   validation rejected every reply. Fix: send the schema as a `json_schema`
+   response format (constrained decoding on Ollama, vLLM, OpenAI and Azure, with a
+   fallback to JSON mode) and lift nested fields without inventing content.
+2. A reply that hit the output limit still contained a complete citation object;
+   the parser took that inner object for the answer. Fix: only the outermost object
+   counts, and the repair message names the output limit.
+3. Still open: on the Kafka listener log the model loops until the 1,024-token
+   limit on both attempts; categories are mostly wrong (`test` or `compile` for
+   configuration and infrastructure failures). Day 4 adds the taxonomy and rerank.
+   Latency is 40 to 140 s per log on a CPU runner.
 
 **Not yet**
-- No real-model numbers in this file yet: the build sandbox cannot reach a model.
-  The `real-model` workflow records them in CI; see its job summary.
 - The excerpt for the Spring log still includes two near-duplicate assertion
   blocks; template mining (Day 2) should fold them.
 

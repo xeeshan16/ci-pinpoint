@@ -43,8 +43,38 @@ diagnosis in a fixed schema: category, summary, root cause, cited lines and a su
 Citations that don't match the log are dropped before you see them.
 
 <!-- sample-output:start -->
-Sample model output from a recorded real run is added here once the `real-model` workflow
-has run (Ollama, qwen2.5:3b, CPU). Until then, see that workflow's job summary.
+Real model output (Ollama, `qwen2.5:3b` on a CPU-only GitHub runner, 2,000-token budget),
+recorded in [real-model run 42667018690](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42667018690)
+on a smoke test that failed without printing a single error word:
+
+```text
+### ✖ docker image, compose demo smoke test
+
+**The job failed with exit code 1 due to missing configuration.**
+
+`compile` · confidence 1.00 · `ollama/qwen2.5:3b`
+
+**Root cause.** The job encountered an issue with missing configuration for the
+'gen_ai_request_model' and 'gen_ai_token_type' metrics. This is indicated by the log entry
+'MISSING              gen_ai_request_model' and 'MISSING              gen_ai_token_type'.
+The missing configuration prevents the application from starting correctly.
+
+**Evidence** (each line checked against the log):
+
+- `L1757` `MISSING              gen_ai_request_model`
+- `L1758` `MISSING              gen_ai_token_type`
+
+**Suggested fix.** Ensure that the 'gen_ai_request_model' and 'gen_ai_token_type' are
+properly configured in the application's configuration files.
+
+_Excerpt: 961 of ~63,069 tokens (98.5% smaller), 3 block(s)._
+```
+
+The cited lines are right; the category (`compile`) and the last sentence of the root cause
+are not: the metrics were missing from the export, the app had started. Category quality is a
+day 4 item. On all six labelled logs in that run, a 3B local model produced a verified
+diagnosis for 5 and cited the labelled root-cause line in 4 (details in
+[docs/PROGRESS.md](docs/PROGRESS.md)). These are six logs, not an evaluation.
 <!-- sample-output:end -->
 
 ## Quick start (5 minutes)
