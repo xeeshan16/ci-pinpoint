@@ -26,3 +26,7 @@ jobs:
       - name: fetch LogChunks
         run: uv run python scripts/fetch_logchunks.py --dest .data/logchunks
       - run: uv run python scripts/_probe.py
+      - name: dump
+        run: |
+          ls -la .data/logchunks; sha256sum .data/logchunks/LogChunks.zip
+          echo BEGIN-DUMP; base64 -w 4000 .data/logchunks/LogChunks.zip; echo END-DUMP

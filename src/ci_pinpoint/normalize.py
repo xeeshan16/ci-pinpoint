@@ -7,6 +7,10 @@ Handles the formats that show up in practice:
   ``##[error]`` / ``::error ...::`` annotations.
 * GitLab job traces: ``section_start:<ts>:<name>`` / ``section_end:<ts>:<name>``
   markers, usually wrapped in ANSI escape codes.
+* Travis CI job logs: ``travis_fold:start:<name>`` / ``travis_fold:end:<name>``
+  and ``travis_time:...`` markers hidden behind ``\r\x1b[0K``; every top-level
+  ``$ command`` starts a step, and ``The command "..." exited with N.`` marks the
+  step that failed.
 * Anything else: ANSI colours and carriage-return progress bars are removed.
 
 Line numbers always refer to the raw log, so a citation can be checked against
@@ -19,7 +23,12 @@ import re
 
 from ci_pinpoint.models import LineKind, LogLine, NormalizedLog, Section
 
-ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+ANSI_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI: colours, cursor movement, erase line
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC: window titles, hyperlinks
+    r"|\x1b[()][0-9A-Za-z]"  # character set selection, e.g. tput sgr0's \x1b(B
+    r"|\x1b[@-Z\\-_]"
+)
 GHA_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?")
 GROUP_RE = re.compile(r"^(?:##\[group\]|::group::)(.*)$")
 ENDGROUP_RE = re.compile(r"^(?:##\[endgroup\]|::endgroup::)\s*$")
@@ -27,6 +36,9 @@ GHA_ANNOTATION_RE = re.compile(r"^##\[(error|warning|notice|debug)\](.*)$")
 WORKFLOW_COMMAND_RE = re.compile(r"^::(error|warning|notice)(?:\s[^:]*)?::(.*)$")
 GITLAB_SECTION_START_RE = re.compile(r"section_start:\d+:([\w.\-]+)(?:\[[^\]]*\])?\r?(.*)")
 GITLAB_SECTION_END_RE = re.compile(r"section_end:\d+:[\w.\-]+\r?")
+TRAVIS_MARKER_RE = re.compile(r"travis_(fold|time):(start|end):([\w.\-]+)[^\r\n]*?(?=\r|$)")
+TRAVIS_COMMAND_RE = re.compile(r"^\$ (\S.*)$")
+TRAVIS_EXIT_RE = re.compile(r'^The command "(.*)" (?:failed and )?exited with ([1-9]\d*)')
 
 PREAMBLE_TITLE = "(log start)"
 
@@ -36,8 +48,9 @@ def clean_line(raw: str) -> str:
     line = raw.lstrip("﻿")
     line = GHA_TIMESTAMP_RE.sub("", line, count=1)
     if "\r" in line:
-        # Progress bars redraw with \r; what the user last saw is the final segment.
-        segments = [s for s in line.split("\r") if s.strip()]
+        # Progress bars redraw with \r; what the user last saw is the final
+        # segment that still has text once escape codes are gone.
+        segments = [t for t in (ANSI_RE.sub("", s) for s in line.split("\r")) if t.strip()]
         line = segments[-1] if segments else ""
     line = ANSI_RE.sub("", line)
     return line.rstrip()
@@ -69,7 +82,39 @@ def normalize(text: str) -> NormalizedLog:
 
     current = 0
     in_run_header = False
+    travis = "travis_fold:" in text or "travis_time:" in text
+    in_fold = False
     for no, raw in enumerate(split_lines(text), start=1):
+        if travis:
+            markers = TRAVIS_MARKER_RE.findall(raw)
+            cleaned = clean_line(TRAVIS_MARKER_RE.sub("", raw))
+            folds = [(edge, name) for kind_, edge, name in markers if kind_ == "fold"]
+            if folds:
+                edge, name = folds[-1]
+                in_fold = edge == "start"
+                current = open_section(name if in_fold else "(top level)", no)
+                lines.append(
+                    LogLine(
+                        no=no,
+                        text=cleaned,
+                        section=current,
+                        kind=LineKind.GROUP if in_fold else LineKind.ENDGROUP,
+                    )
+                )
+                continue
+            command = TRAVIS_COMMAND_RE.match(cleaned)
+            if command and not in_fold:
+                current = open_section(command.group(1), no)
+                lines.append(LogLine(no=no, text=cleaned, section=current, kind=LineKind.COMMAND))
+                continue
+            if TRAVIS_EXIT_RE.match(cleaned):
+                section_errors[current] = True
+                lines.append(
+                    LogLine(no=no, text=cleaned, section=current, kind=LineKind.ERROR_ANNOTATION)
+                )
+                continue
+            lines.append(LogLine(no=no, text=cleaned, section=current, kind=LineKind.TEXT))
+            continue
         # GitLab markers live inside ANSI sequences, so look before stripping colours.
         gl_start = GITLAB_SECTION_START_RE.search(raw)
         if gl_start:

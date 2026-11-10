@@ -119,7 +119,9 @@ BOILERPLATE = re.compile(
     r"To see the full stack trace of the errors, re-run Maven|^\[ERROR\]\s*$|"
     r"^npm ERR! A complete log of this run can be found|^npm ERR!\s*$|"
     r"Run with --stacktrace option to get the stack trace|Run with --(?:info|debug) option|"
-    r"Run with --scan to get full insights|Get more help at https://help\.gradle\.org",
+    r"Run with --scan to get full insights|Get more help at https://help\.gradle\.org|"
+    # Travis CI prints these after every failed job.
+    r"^Done\. Your build exited with \d+|job_stages: line \d+: shell_session_update: command not",
 )
 WARNING = re.compile(r"\bwarn(?:ing)?\b|\bdeprecat", re.IGNORECASE)
 # A log level of WARN/INFO/DEBUG means the program itself did not treat the line as fatal.
@@ -128,7 +130,9 @@ STACK_FRAME = re.compile(
     r"^\s+at [\w.$<>/\-]+[.(]|^\s+File \"[^\"]+\", line \d+|^\s*\.\.\. \d+ more$|"
     r"^\s+[\w./\-]+\.go:\d+|^\s+at .+:\d+:\d+\)?$"
 )
-GENERIC_EXIT = re.compile(r"^Process completed with exit code \d+\.?$")
+GENERIC_EXIT = re.compile(
+    r"^Process completed with exit code \d+\.?$|^The command \".*\" (?:failed and )?exited with \d+"
+)
 LOW_VALUE_SECTION = re.compile(
     r"^(?:Set up job|Runner Image|Operating System|Runner Image Provisioner|"
     r"GITHUB_TOKEN Permissions|"
