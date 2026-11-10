@@ -71,12 +71,17 @@ jobs:
         with:
           path: .data/logchunks
           key: logchunks-3632351-v1
-      - name: line selection vs tail and grep, all repositories and the held-out test split
+      - name: line selection vs tail and grep (dev split for tuning, test split held out)
+        env:
+          STRATEGIES: tail,grep,pinpoint-nofill,pinpoint
         run: |
-          uv run ci-pinpoint eval --fetch --data .data/logchunks --out reports/eval-all -v
+          uv run ci-pinpoint eval --fetch --data .data/logchunks --split dev \
+            --strategies "$STRATEGIES" --out reports/eval-dev -v
+          uv run ci-pinpoint eval --data .data/logchunks --strategies "$STRATEGIES" \
+            --out reports/eval-all
           uv run ci-pinpoint eval --data .data/logchunks --split test --budgets 2000 \
-            --out reports/eval-test
-          cat reports/eval-all/eval.md reports/eval-test/eval.md >> "$GITHUB_STEP_SUMMARY"
+            --strategies "$STRATEGIES" --out reports/eval-test
+          cat reports/eval-{dev,all,test}/eval.md >> "$GITHUB_STEP_SUMMARY"
       - name: labels that could not be matched (diagnostic)
         run: |
           python3 - <<'PY'

@@ -143,7 +143,7 @@ def test_repeated_evidence_is_not_selected_twice() -> None:
     ]
     filler = [f"[INFO] building module {i}" for i in range(20)]
     text = "\n".join((chunk + filler) * 5)
-    excerpt = build_excerpt(normalize(text), budget=2000)
+    excerpt = build_excerpt(normalize(text), budget=2000, fill=False)
     cause_lines = [
         line for block in excerpt.blocks for line in block.lines if "unknown PII type" in line.text
     ]
@@ -166,7 +166,8 @@ def test_real_logs_root_cause_is_in_the_excerpt(real_case: RealCase, budget: int
         assert any(anchor in text for text in selected), anchor
     assert excerpt.tokens <= budget
     raw = estimate_lines_tokens(line.text for line in log.lines)
-    assert excerpt.tokens < raw * 0.35
+    # Without filling leftover budget, the scored blocks alone are a small share.
+    assert build_excerpt(log, budget=budget, fill=False).tokens < raw * 0.35
 
 
 def test_travis_failed_command_tail_and_boilerplate() -> None:
@@ -179,3 +180,54 @@ def test_travis_failed_command_tail_and_boilerplate() -> None:
     assert score_text("Done. Your build exited with 1.")[0] == 0.0
     noise = "/home/travis/.travis/job_stages: line 166: shell_session_update: command not found"
     assert score_text(noise)[0] == 0.0
+
+
+def test_leftover_budget_goes_to_the_failed_step_nearest_the_failure() -> None:
+    # Varied lengths, so no run of same-template lines gets folded.
+    output = ["out " * (i % 4 + 1) + "end" for i in range(200)]
+    text = "\n".join(
+        [
+            "##[group]Run make test",
+            "make test",
+            "##[endgroup]",
+            *output,
+            "error: the build broke",
+            "##[error]Process completed with exit code 2.",
+            "##[group]Run actions/upload-artifact@v4",
+            "uploading",
+            "##[endgroup]",
+        ]
+    )
+    log = normalize(text)
+    plain = build_excerpt(log, budget=600, fill=False)
+    filled = build_excerpt(log, budget=600)
+    assert plain.line_numbers() < filled.line_numbers()
+    assert plain.tokens < filled.tokens <= 600
+    added = filled.line_numbers() - plain.line_numbers()
+    assert 194 in added  # the output right before the failed-step tail comes first
+    assert all(n <= 205 for n in added)  # never the upload step after the failure
+    assert any("failed_step_context" in b.signals for b in filled.blocks)
+
+
+def test_fill_uses_the_end_of_the_log_when_no_step_failed() -> None:
+    words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
+    text = "\n".join(f"{words[i % 8]} {words[(i // 8) % 8]} done" for i in range(100))
+    excerpt = build_excerpt(normalize(text), budget=100)
+    assert max(excerpt.line_numbers()) == 100
+    assert excerpt.tokens <= 100
+
+
+def test_fill_keeps_walking_back_past_folded_runs() -> None:
+    text = "\n".join(
+        [*("out " * (i % 4 + 1) + "end" for i in range(10)), *(f"line {i}" for i in range(60))]
+    )
+    excerpt = build_excerpt(normalize(text), budget=200)
+    assert excerpt.tokens <= 200
+    folded = {
+        n
+        for b in excerpt.blocks
+        for e in b.elided
+        for n in range(e.after + 1, e.after + e.count + 1)
+    }
+    assert 70 in folded
+    assert 10 in excerpt.line_numbers()  # reached the lines before the repeated run

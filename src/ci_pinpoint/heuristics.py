@@ -156,6 +156,9 @@ MAX_BLOCK_LINES = 60
 MAX_BLOCK_SHARE = 0.4  # no single block may take more than this share of the budget
 MIN_NOVELTY = 0.5  # a block must bring at least this share of new evidence templates
 MIN_RUN = 3  # fold runs of at least this many same-template lines
+FILL_MIN_TOKENS = 24  # don't bother filling a smaller leftover budget
+FILL_SIGNAL = "failed_step_context"
+FILL_LOOKBACK = 8  # consider lines worth up to this many budgets before folding
 
 
 def score_text(text: str) -> tuple[float, tuple[str, ...]]:
@@ -424,8 +427,76 @@ class BlockRanker(Protocol):
     def rank(self, blocks: Sequence[Block], ctx: LogContext) -> list[Block]: ...
 
 
-def select_blocks(blocks: Sequence[Block], ctx: LogContext, budget: int) -> Excerpt:
-    """Greedy, diversity-aware selection of blocks under a token budget."""
+def _spans(blocks: Sequence[Block]) -> set[int]:
+    """Every line inside a chosen block's range, including the stack frames and
+    repeated lines it deliberately left out: filling must not put them back."""
+    return {no for block in blocks for no in range(block.start, block.end + 1)}
+
+
+def _largest_tail_block(lines: Sequence[LogLine], ctx: LogContext, budget: int) -> Block | None:
+    """The block made of the most lines from the end of ``lines`` that fits
+    ``budget`` once stack frames are compacted and repeated lines folded."""
+    lo, hi = 0, len(lines)
+    best: Block | None = None
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        block = _make_block(lines[len(lines) - mid :], ctx, tag=FILL_SIGNAL)
+        if block_tokens(block) <= budget:
+            lo, best = mid, block
+        else:
+            hi = mid - 1
+    return best
+
+
+def _fill(chosen: list[Block], ctx: LogContext, budget: int, used: int) -> int:
+    """Spend what the scored blocks left of the budget on the failed steps' output,
+    walking back from where each step failed (or from the end of the log when no
+    step is known to have failed). Appends to ``chosen``; returns tokens used."""
+    log = ctx.log
+    if not log.lines:
+        return used
+    covered = _spans(chosen)
+    failed = [s for s in reversed(log.sections) if s.has_error]
+    spans = [(s.first_line, s.last_line) for s in failed] or [(1, log.lines[-1].no)]
+    for first, last in spans:
+        remaining = budget - used
+        if remaining < FILL_MIN_TOKENS:
+            break
+        # Candidates nearest the failure first, then take as many as fit after
+        # folding. Folding can shrink a run a lot, so look well past the budget.
+        picked: list[LogLine] = []
+        raw_cost = 0
+        for line in reversed(log.lines[first - 1 : last]):
+            if (
+                line.no in covered
+                or line.kind is LineKind.ENDGROUP
+                or not line.text.strip()
+                or BOILERPLATE.search(line.text)
+            ):
+                continue
+            picked.append(line)
+            raw_cost += estimate_line_tokens(line.text)
+            if raw_cost > FILL_LOOKBACK * remaining:
+                break
+        block = _largest_tail_block(picked[::-1], ctx, remaining)
+        if block is None:
+            continue
+        chosen.append(block)
+        used += block_tokens(block)
+        covered |= _spans([block])
+    return used
+
+
+def select_blocks(
+    blocks: Sequence[Block], ctx: LogContext, budget: int, *, fill: bool = True
+) -> Excerpt:
+    """Greedy, diversity-aware selection of blocks under a token budget.
+
+    With ``fill`` (the default), budget the scored blocks did not need goes to
+    more of the failed step's output, nearest the failure first: on LogChunks
+    the scored blocks alone used under half of a 2,000-token budget, and the
+    labelled failure is most often in the failing step's last lines.
+    """
     # Failed-step tails go first: they are cheap and orient the reader (and the
     # model) even when the cause is elsewhere. Then the rest by score.
     ordered = sorted(blocks, key=lambda b: ("failed_step_tail" not in b.signals, -b.score, -b.end))
@@ -463,13 +534,17 @@ def select_blocks(blocks: Sequence[Block], ctx: LogContext, budget: int) -> Exce
         covered_templates.update(
             ctx.cluster(line.no) for line in candidate.lines if ctx.is_seed(line.no)
         )
+    if fill:
+        used = _fill(chosen, ctx, budget, used)
     chosen.sort(key=lambda b: b.start)
     return Excerpt(blocks=tuple(chosen), tokens=used, budget=budget, candidates=len(blocks))
 
 
-def build_excerpt(log: NormalizedLog, budget: int, ranker: BlockRanker | None = None) -> Excerpt:
+def build_excerpt(
+    log: NormalizedLog, budget: int, ranker: BlockRanker | None = None, *, fill: bool = True
+) -> Excerpt:
     ctx = analyse(log)
     blocks = candidate_blocks(ctx)
     if ranker is not None:
         blocks = ranker.rank(blocks, ctx)
-    return select_blocks(blocks, ctx, budget)
+    return select_blocks(blocks, ctx, budget, fill=fill)

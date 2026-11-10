@@ -44,7 +44,7 @@ DEV_SHARE = 3  # out of 10: repositories hashed into buckets 0-2 form the dev sp
 
 # Escape bytes are not allowed in XML 1.0, so LogChunks labels keep only the
 # printable remainder of colour codes: "[m[37m", "[30;1m", "[0K".
-ORPHAN_SGR_RE = re.compile(r"\[(?:\d{1,3}(?:;\d{1,3})*)?[mK]")
+ORPHAN_SGR_RE = re.compile(r"(?:\(B)?\[(?:\d{1,3}(?:;\d{1,3})*)?[mK]")  # also tput's "(B"
 MIN_SUBSTRING = 6  # shorter chunk lines must match a log line exactly
 MAX_SKIP = 2  # non-matching, non-blank log lines tolerated between two chunk lines
 MIN_LOCATED_SHARE = 0.5  # at least this share of chunk lines must be found

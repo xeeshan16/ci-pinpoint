@@ -9,6 +9,8 @@ clipped the same way), so the comparison is about *which* lines are chosen.
   ``grep -iE 'error|fail' | tail``.
 * ``pinpoint``: ci-pinpoint's selection stage (heuristics, template mining,
   failed-step tails), the excerpt the model sees. No model involved.
+* ``pinpoint-nofill``: the same without spending leftover budget on the failed
+  step's output (the selection before day 3), kept as an ablation.
 * ``pinpoint+emb``: the same, with blocks re-ranked by an embedding model.
 
 The baselines run on the cleaned log (no ANSI codes or timestamps), which makes
@@ -82,9 +84,13 @@ class GrepStrategy:
 class PinpointStrategy:
     """ci-pinpoint's own selection stage, optionally with an embedding re-ranker."""
 
-    def __init__(self, ranker: BlockRanker | None = None, name: str | None = None) -> None:
+    def __init__(
+        self, ranker: BlockRanker | None = None, name: str | None = None, *, fill: bool = True
+    ) -> None:
         self.ranker = ranker
-        self.name = name or ("pinpoint+emb" if ranker is not None else "pinpoint")
+        self.fill = fill
+        default = "pinpoint+emb" if ranker is not None else "pinpoint"
+        self.name = name or (default if fill else f"{default}-nofill")
 
     def select(self, log: NormalizedLog, budgets: Sequence[int]) -> dict[int, Selection]:
         ctx = analyse(log)
@@ -93,7 +99,7 @@ class PinpointStrategy:
             blocks = self.ranker.rank(blocks, ctx)
         out: dict[int, Selection] = {}
         for budget in budgets:
-            excerpt = select_blocks(blocks, ctx, budget)
+            excerpt = select_blocks(blocks, ctx, budget, fill=self.fill)
             out[budget] = Selection(frozenset(excerpt.line_numbers()), excerpt.tokens)
         return out
 
@@ -111,6 +117,8 @@ def build_strategies(names: Sequence[str], ranker: BlockRanker | None = None) ->
             out.append(GrepStrategy())
         elif name == "pinpoint":
             out.append(PinpointStrategy())
+        elif name == "pinpoint-nofill":
+            out.append(PinpointStrategy(fill=False))
         elif name == "pinpoint+emb":
             if ranker is None:
                 raise ValueError("pinpoint+emb needs an embedder (--embedder)")
@@ -120,4 +128,4 @@ def build_strategies(names: Sequence[str], ranker: BlockRanker | None = None) ->
     return out
 
 
-STRATEGY_NAMES = ("tail", "grep", "pinpoint", "pinpoint+emb")
+STRATEGY_NAMES = ("tail", "grep", "pinpoint", "pinpoint-nofill", "pinpoint+emb")

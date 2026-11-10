@@ -22,6 +22,7 @@ LABELS = {
     "tail": "tail (last lines)",
     "grep": "grep -iE 'error\\|fail'",
     "pinpoint": "ci-pinpoint selection",
+    "pinpoint-nofill": "ci-pinpoint, no budget fill",
     "pinpoint+emb": "ci-pinpoint + embeddings",
 }
 
