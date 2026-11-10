@@ -1,10 +1,27 @@
 name: eval
 
-# Fetches the LogChunks dataset (Zenodo, CC-BY-4.0) and inventories it.
-# Zenodo is reachable from GitHub runners; the dataset is cached between runs.
+# On-demand evaluation on LogChunks (Zenodo, CC BY 4.0), optionally with a real
+# local model on the runner's CPU: embedding re-ranking and/or diagnosis of a
+# deterministic sample. The model-free eval also runs in ci.yml on every push.
 
 on:
   workflow_dispatch:
+    inputs:
+      split:
+        description: repository split (all, dev, test)
+        default: all
+      embedder:
+        description: none, or ollama to add the pinpoint+emb strategy
+        default: none
+      embed_model:
+        description: Ollama embedding model
+        default: nomic-embed-text
+      diagnose:
+        description: number of logs to diagnose with the model (0 = none)
+        default: "0"
+      model:
+        description: Ollama chat model for diagnosis
+        default: qwen2.5:3b
 
 permissions:
   contents: read
@@ -12,7 +29,10 @@ permissions:
 jobs:
   logchunks:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
+    env:
+      CI_PINPOINT_TIMEOUT_S: "900"
+      CI_PINPOINT_MAX_RETRIES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -23,19 +43,29 @@ jobs:
         with:
           path: .data/logchunks
           key: logchunks-3632351-v1
-      - name: fetch LogChunks
-        run: uv run python scripts/fetch_logchunks.py --dest .data/logchunks
-      - name: inventory
+      - name: install and start Ollama
+        if: inputs.embedder == 'ollama' || inputs.diagnose != '0'
         run: |
-          cd .data/logchunks
-          find . -maxdepth 4 -type d | sort | head -60
-          echo "--- file counts by extension"
-          find . -type f | sed 's/.*\.//' | sort | uniq -c
-          echo "--- first files"
-          find . -type f | sort | head -30
-          echo "--- one label file"
-          f=$(find . -type f \( -name '*.xml' -o -name '*.json' -o -name '*.csv' \) | sort | head -1)
-          echo "$f"; head -c 4000 "$f"; echo
-          echo "--- one log file (head and tail)"
-          l=$(find . -type f -name '*.log' | sort | head -1)
-          echo "$l"; wc -l "$l"; head -20 "$l" | cat -v | cut -c1-200; echo ...; tail -20 "$l" | cat -v | cut -c1-200
+          curl -fsSL https://ollama.com/install.sh | sh
+          if ! curl -sf http://localhost:11434/api/tags > /dev/null; then
+            nohup ollama serve > /tmp/ollama.log 2>&1 &
+          fi
+          for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags > /dev/null && break; sleep 1; done
+          if [ "${{ inputs.embedder }}" = "ollama" ]; then ollama pull "${{ inputs.embed_model }}"; fi
+          if [ "${{ inputs.diagnose }}" != "0" ]; then ollama pull "${{ inputs.model }}"; fi
+      - name: evaluate
+        run: |
+          args=(--fetch --data .data/logchunks --split "${{ inputs.split }}" --out reports/eval -v)
+          if [ "${{ inputs.embedder }}" = "ollama" ]; then
+            args+=(--embedder ollama --embed-model "${{ inputs.embed_model }}")
+          fi
+          if [ "${{ inputs.diagnose }}" != "0" ]; then
+            args+=(--diagnose "${{ inputs.diagnose }}" --provider ollama --model "${{ inputs.model }}")
+          fi
+          uv run ci-pinpoint eval "${args[@]}"
+          cat reports/eval/eval.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-logchunks
+          path: reports/

@@ -56,6 +56,47 @@ jobs:
           name: test-reports-${{ matrix.python }}
           path: reports/
 
+  eval:
+    name: eval on LogChunks (no model)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - uses: actions/cache@v4
+        with:
+          path: .data/logchunks
+          key: logchunks-3632351-v1
+      - name: line selection vs tail and grep, all repositories and the held-out test split
+        run: |
+          uv run ci-pinpoint eval --fetch --data .data/logchunks --out reports/eval-all -v
+          uv run ci-pinpoint eval --data .data/logchunks --split test --budgets 2000 \
+            --out reports/eval-test
+          cat reports/eval-all/eval.md reports/eval-test/eval.md >> "$GITHUB_STEP_SUMMARY"
+      - name: labels that could not be matched (diagnostic)
+        run: |
+          python3 - <<'PY'
+          import collections, json
+          report = json.load(open("reports/eval-all/eval.json"))
+          unlocated = report["unlocated"]
+          print(len(unlocated), "unlocated:", collections.Counter(u["reason"] for u in unlocated))
+          for u in unlocated[:25]:
+              print(f"  {u['id']}: {u['reason']} ({u['found']}/{u['wanted']} chunk lines)")
+          PY
+      - name: eval on the hand-labelled GitHub Actions fixtures
+        run: |
+          uv run ci-pinpoint eval --dataset manifest --data tests/fixtures/logs --out reports/eval-fixtures
+          cat reports/eval-fixtures/eval.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-reports
+          path: reports/
+
   package:
     name: build, install, smoke test
     runs-on: ubuntu-latest
@@ -88,6 +129,8 @@ jobs:
           PY
           gzip -dc tests/fixtures/logs/format-check-diff.log.gz | /tmp/clean/bin/ci-pinpoint explain - --no-llm > reports/stdin.txt
           grep -q "Code is not formatted" reports/stdin.txt
+          /tmp/clean/bin/ci-pinpoint eval --dataset manifest --data tests/fixtures/logs \
+            --out reports/eval-wheel --fail-under 1.0 > /dev/null
       - name: fixture smoke report (fake provider)
         run: |
           uv run python scripts/fixture_report.py --provider fake --out reports/fixtures
