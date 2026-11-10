@@ -12,6 +12,7 @@ from ci_pinpoint.tokens import (
 )
 
 from .conftest import RealCase
+from .test_normalize import TRAVIS_LOG
 
 
 @pytest.mark.parametrize(
@@ -166,3 +167,15 @@ def test_real_logs_root_cause_is_in_the_excerpt(real_case: RealCase, budget: int
     assert excerpt.tokens <= budget
     raw = estimate_lines_tokens(line.text for line in log.lines)
     assert excerpt.tokens < raw * 0.35
+
+
+def test_travis_failed_command_tail_and_boilerplate() -> None:
+    log = normalize(TRAVIS_LOG)
+    excerpt = build_excerpt(log, 400)
+    shown = {line.no: line.text for block in excerpt.blocks for line in block.lines}
+    assert shown[11] == "An error occured while installing Cake."
+    assert 13 in shown  # the failed-command line orients the reader
+    assert 14 not in shown  # "Done. Your build exited with 1." is boilerplate
+    assert score_text("Done. Your build exited with 1.")[0] == 0.0
+    noise = "/home/travis/.travis/job_stages: line 166: shell_session_update: command not found"
+    assert score_text(noise)[0] == 0.0

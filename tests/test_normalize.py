@@ -97,3 +97,74 @@ def test_carriage_returns_do_not_shift_line_numbers() -> None:
         (2, "progress 100%"),
         (3, "error: boom"),
     ]
+
+
+def test_clean_line_drops_charset_selection_and_trailing_erase() -> None:
+    assert clean_line("\x1b[36mdotnet-install:\x1b(B\x1b[m done") == "dotnet-install: done"
+    assert clean_line("Downloading 10%\rDownloading 55%\r\x1b[0K") == "Downloading 55%"
+
+
+TRAVIS_LOG = "\n".join(
+    [
+        "travis_fold:start:worker_info\r\x1b[0K\x1b[33;1mWorker information\x1b[0m",
+        "hostname: worker-1",
+        "travis_fold:end:worker_info\r\x1b[0Ktravis_fold:start:system_info\r\x1b[0K"
+        "\x1b[33;1mBuild system information\x1b[0m\r\r",
+        "Build language: csharp\r\r",
+        "travis_fold:end:system_info\r\x1b[0K\r\r",
+        "travis_fold:start:install\r\x1b[0Ktravis_time:start:aa\r\x1b[0K$ bundle install\r\r",
+        "Using rake 12.0\r\r",
+        "travis_time:end:aa:start=1,finish=2,duration=1\r\x1b[0K\r\r",
+        "travis_fold:end:install\r\x1b[0K\r\r",
+        "travis_time:start:bb\r\x1b[0K$ ./build.sh --verbosity=minimal\r\r",
+        "An error occured while installing Cake.\r\r",
+        "travis_time:end:bb:start=1,finish=2,duration=1\r\x1b[0K\r\r",
+        '\x1b[31;1mThe command "./build.sh --verbosity=minimal" exited with 1.\x1b[0m\r\r',
+        "Done. Your build exited with 1.\r\r",
+    ]
+)
+
+
+def test_travis_folds_commands_and_failed_command() -> None:
+    log = normalize(TRAVIS_LOG)
+    assert [line.no for line in log.lines] == list(range(1, 15))
+    titles = [s.title for s in log.sections]
+    assert titles == [
+        "(log start)",
+        "worker_info",
+        "system_info",
+        "(top level)",
+        "install",
+        "(top level)",
+        "./build.sh --verbosity=minimal",
+    ]
+    failed = [s.title for s in log.sections if s.has_error]
+    assert failed == ["./build.sh --verbosity=minimal"]
+    by_no = log.by_number()
+    assert by_no[1].text == "Worker information"
+    assert by_no[1].kind is LineKind.GROUP
+    # "$ bundle install" sits inside a fold: output of that fold, not a new step.
+    assert by_no[6].kind is LineKind.GROUP
+    assert by_no[6].text == "$ bundle install"
+    assert by_no[10].kind is LineKind.COMMAND
+    assert by_no[11].text == "An error occured while installing Cake."
+    assert by_no[12].text == ""
+    assert by_no[13].kind is LineKind.ERROR_ANNOTATION
+    assert by_no[13].text == 'The command "./build.sh --verbosity=minimal" exited with 1.'
+
+
+def test_travis_failure_inside_a_fold_marks_that_fold() -> None:
+    text = (
+        "travis_fold:start:install.1\r\x1b[0K$ npm ci\r\n"
+        "npm ERR! code ELIFECYCLE\r\n"
+        'The command "npm ci" failed and exited with 1 during .\r\n'
+        "travis_fold:end:install.1\r\x1b[0K\r\n"
+    )
+    log = normalize(text)
+    assert [s.title for s in log.sections if s.has_error] == ["install.1"]
+
+
+def test_dollar_lines_are_plain_text_outside_travis_logs() -> None:
+    log = normalize("section_start:1:step_script\r\x1b[0K\n$ make test\nboom\n")
+    assert [s.title for s in log.sections] == ["(log start)", "step_script"]
+    assert log.lines[1].kind is LineKind.TEXT
