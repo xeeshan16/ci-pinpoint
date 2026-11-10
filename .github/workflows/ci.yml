@@ -77,8 +77,9 @@ jobs:
         run: |
           uv run ci-pinpoint eval --fetch --data .data/logchunks --split dev \
             --strategies "$STRATEGIES" --out reports/eval-dev -v
+          # Gate: line recall on all 773 aligned logs was 0.766 at commit 54a50d2.
           uv run ci-pinpoint eval --data .data/logchunks --strategies "$STRATEGIES" \
-            --out reports/eval-all
+            --out reports/eval-all --fail-under 0.75
           uv run ci-pinpoint eval --data .data/logchunks --split test --budgets 2000 \
             --strategies "$STRATEGIES" --out reports/eval-test
           cat reports/eval-{dev,all,test}/eval.md >> "$GITHUB_STEP_SUMMARY"
