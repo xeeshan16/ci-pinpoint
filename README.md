@@ -199,6 +199,12 @@ and not significant (+2.3 points, interval -2.5 to +7.1). Source:
 [CI run 42822696413](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42822696413),
 ci-pinpoint at commit `54a50d2`, no model, deterministic.
 
+With a model on top (Ollama `qwen2.5:3b` on a CPU-only runner, a deterministic sample of
+20 test-split logs, [eval run 42823682451](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823682451)):
+17 of 20 diagnoses had at least one verified citation, but only 9 of 20 cited a labelled
+line, at 47 s per log. The right lines reach the model far more often than a 3B model points
+at them; closing that gap is the next milestone.
+
 Reproduce it, or score your own labelled logs:
 
 ```bash

@@ -156,3 +156,103 @@ Root cause kept in the excerpt, by token budget:
 Zenodo is blocked from the build sandbox), tail-N, grep and heuristics-only baselines,
 chunk line recall and precision at a fixed budget, token reduction, and
 `ci-pinpoint eval` with JSON and Markdown reports.
+
+## Day 3: 2026-11-10, evaluation harness
+
+**Shipped**
+- `ci-pinpoint eval`: one command that scores line selection against baselines on a
+  labelled dataset and writes `eval.json` (per-log scores) and `eval.md`.
+  - Datasets: LogChunks (797 Travis CI logs from 80 repositories, CC BY 4.0), downloaded
+    from Zenodo on demand with `--fetch`, checksum-verified, unzipped with a path check;
+    or any `manifest.json` of labelled logs (the six GitHub Actions fixtures use it).
+  - Label alignment: LogChunks labels are text with escape bytes removed, so `[37m`
+    remnants, blank lines from `\r\r\n` endings and partial first lines are matched back to
+    raw line numbers, anchored on the most distinctive chunk lines. 773 of 797 align; the
+    24 that don't are listed with how much was found (among them chunks of up to 5,696
+    lines, and six one-line chunks from one repository that are not found in their logs).
+  - Strategies at the same budget and token estimate: `tail`, `grep -iE 'error|fail'`,
+    `pinpoint`, `pinpoint-nofill` (ablation) and `pinpoint+emb`.
+  - Metrics: failure shown, line recall, whole failure shown, precision, tokens, reduction,
+    a paired bootstrap 95% interval on the recall difference, a budget sweep.
+  - Repository split (SHA-256 of the repo, 3 in 10 to dev): 189 dev, 584 test logs.
+  - `--diagnose N` scores model diagnoses on a deterministic sample (verified, cites a
+    labelled line, citation precision, latency, tokens); `--fail-under` gates CI.
+- Travis CI support in the normaliser (folds, `$ command` steps, the failed-command line,
+  Travis's post-failure boilerplate), needed because LogChunks is Travis.
+- Budget fill: leftover budget goes to the failed step's output, nearest the failure first,
+  as one block sized after folding and frame compaction (binary search on the number of
+  lines), never re-adding lines a chosen block deliberately left out.
+- CI runs the eval on every push (dev, all, test, and the fixtures), gated at line recall
+  0.75 on all logs. A manual `eval` workflow adds Ollama embeddings and model diagnosis.
+- ADR 0003 on the evaluation method.
+
+**Measured** (LogChunks, 2,000-token budget, no model, deterministic;
+[CI run 42822696413](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42822696413))
+
+| split | strategy | failure shown | line recall | whole failure | mean tokens |
+|---|---|---|---|---|---|
+| test (584) | tail | 69.7% | 64.5% | 60.8% | 1,983 |
+| test (584) | grep | 56.5% | 18.5% | 5.1% | 757 |
+| test (584) | pinpoint, no fill | 81.5% | 60.5% | 42.3% | 895 |
+| test (584) | pinpoint | 91.6% | 78.3% | 64.9% | 1,613 |
+| dev (189) | tail | 72.5% | 68.9% | 66.7% | 1,945 |
+| dev (189) | pinpoint, no fill | 77.2% | 61.7% | 49.7% | 1,060 |
+| dev (189) | pinpoint | 84.1% | 71.2% | 64.0% | 1,484 |
+
+- Recall difference vs tail (test): +13.8 points, 95% interval +10.4 to +17.2. On dev:
+  +2.3, interval -2.5 to +7.1, so not significant there.
+- Budget sweep, all 773 logs, line recall: pinpoint 53.8 / 67.4 / 76.6 / 81.9% at
+  500 / 1,000 / 2,000 / 4,000 tokens; tail 41.3 / 53.9 / 65.6 / 74.5%.
+- The six GitHub Actions fixtures: pinpoint 6/6 at every budget; tail 1/6 at 2,000 tokens,
+  grep 5/6.
+- 227 tests pass locally and in CI on Python 3.11 to 3.13
+  ([CI run 42825005092](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42825005092)).
+
+**Model diagnosis on LogChunks** (first real-model numbers on the public set: Ollama
+`qwen2.5:3b` on a CPU-only runner, 2,000-token budget, temperature 0, one repair; a
+deterministic sample of 20 test-split logs;
+[eval run 42823682451](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823682451))
+
+| verified diagnosis | cites a labelled line | citation precision | errors | mean latency | tokens in / out |
+|---|---|---|---|---|---|
+| 17/20 (85%) | 9/20 (45%) | 34.9% | 2 | 47 s | 2,621 / 326 |
+
+The excerpt contains the labelled failure for about 9 in 10 logs, but a 3B model cites it
+in fewer than half: the gap between "the right lines reach the model" and "the model
+points at them" is now the biggest loss, and it is what day 4 works on. Twenty logs, one
+run: a direction, not a precise rate.
+
+An embedding re-ranking run over all 773 logs (`nomic-embed-text` on the runner's CPU,
+[eval run 42823687484](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823687484))
+was still running when this entry was written; day 4 records its result next to the LLM
+rerank.
+
+**What the eval taught us**
+1. The first run (before the fill) said the day 2 selection *lost* to plain tail on line
+   recall (60.8% vs 65.6%, all logs), while finding the failure more often (80.5% vs
+   70.4%) with half the tokens: it stopped at about 940 tokens of a 2,000 budget, and
+   LogChunks failures sit in the failing step's last lines more often than not. The fill
+   turned that into a 13.8-point lead on test. That first run included the test
+   repositories, so the change was motivated by test data in aggregate (it was not fitted
+   to individual labels); the dev split, where the gain is smaller, is the more cautious
+   number. Tuning from here looks at dev only.
+2. Grep is a weak baseline on real logs: most lines that say "error" or "fail" are not the
+   failure, and the chunk is often a test assertion or a compiler message without either
+   word.
+3. Precision is low for every strategy (13 to 18%) because a 2,000-token excerpt is larger
+   than most chunks. That is the model's job on day 4: rerank and cite.
+
+**Found along the way**
+- The first version of the CI gate judged the first non-baseline strategy, which was the
+  `pinpoint-nofill` ablation, and failed CI on `23a7bf6` although `pinpoint` was above the
+  threshold. Fixed in the next commit with a test that only the budget fill can pass.
+- Zenodo is blocked from the build environment, so the harness was developed against
+  LogChunks-shaped test data and run on the real dataset in CI only.
+
+**Housekeeping**
+- A stray `probe` branch exists on the repository from a dataset-inspection experiment;
+  it could not be deleted from the build environment and can be removed.
+
+**Next (Day 4):** LLM rerank of candidate blocks, a failure-category taxonomy, prompt-
+injection hardening with a test suite, secret redaction before any prompt, measured on the
+dev split against embedding-only ranking.
