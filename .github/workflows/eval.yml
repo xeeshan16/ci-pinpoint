@@ -1,0 +1,41 @@
+name: eval
+
+# Fetches the LogChunks dataset (Zenodo, CC-BY-4.0) and inventories it.
+# Zenodo is reachable from GitHub runners; the dataset is cached between runs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  logchunks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - uses: actions/cache@v4
+        with:
+          path: .data/logchunks
+          key: logchunks-3632351-v1
+      - name: fetch LogChunks
+        run: uv run python scripts/fetch_logchunks.py --dest .data/logchunks
+      - name: inventory
+        run: |
+          cd .data/logchunks
+          find . -maxdepth 4 -type d | sort | head -60
+          echo "--- file counts by extension"
+          find . -type f | sed 's/.*\.//' | sort | uniq -c
+          echo "--- first files"
+          find . -type f | sort | head -30
+          echo "--- one label file"
+          f=$(find . -type f \( -name '*.xml' -o -name '*.json' -o -name '*.csv' \) | sort | head -1)
+          echo "$f"; head -c 4000 "$f"; echo
+          echo "--- one log file (head and tail)"
+          l=$(find . -type f -name '*.log' | sort | head -1)
+          echo "$l"; wc -l "$l"; head -20 "$l" | cat -v | cut -c1-200; echo ...; tail -20 "$l" | cat -v | cut -c1-200
