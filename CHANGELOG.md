@@ -7,6 +7,15 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `ci-pinpoint eval`: scores line selection against `tail` and `grep` baselines at equal
+  token budgets on LogChunks (797 labelled Travis CI logs, downloaded and checksum-verified
+  with `--fetch`) or any `manifest.json` of labelled logs; failure shown, line recall,
+  precision, tokens, a paired bootstrap interval, a dev/test split by repository,
+  `--diagnose N` for model citations, JSON and Markdown reports and a `--fail-under` gate.
+- Travis CI logs: fold and time markers, top-level `$ command` steps and the failed
+  command line.
+- Leftover excerpt budget is spent on the failed step's output, nearest the failure first
+  (LogChunks test split line recall 60.5% to 78.3% at 2,000 tokens).
 - Drain-style template mining; selection dampens weak repeated lines, judges block
   novelty by template and folds runs of same-template lines into one line plus a count.
 - Optional embedding re-ranking of candidate blocks (`--embedder`, off by default) with
@@ -30,6 +39,8 @@ All notable changes to this project are documented here. The format follows
   that runs the fixtures through a real Ollama model.
 
 ### Fixed
+- The `\x1b(B` that `tput sgr0` emits is stripped; a line ending in `\r\x1b[0K` keeps its
+  text.
 - Small-model replies with fields nested under `root_cause`, string citations or
   more than eight citations no longer fail validation.
 - A reply cut off at the output limit is reported as such instead of an inner

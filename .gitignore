@@ -28,3 +28,6 @@ reports/
 *.swp
 .DS_Store
 
+
+# Datasets fetched for evaluation
+.data/

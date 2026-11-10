@@ -56,6 +56,8 @@ project completed.
   Day 6 (retries with backoff, structured logs), because the first slice is not
   useful without them. Those days build on it: Day 4 adds the rerank, the
   injection test suite and secret redaction; Day 6 adds tracing and metrics.
-- Zenodo (where LogChunks is published) is not reachable from the build sandbox.
-  Day 3 will fetch the dataset in CI, where it is reachable, and cache it as a
-  workflow artifact, or fall back to a pinned mirror of the same files if one exists.
+- Zenodo (where LogChunks is published) is not reachable from the build sandbox, so the
+  LogChunks eval runs in CI (dataset cached with actions/cache); the harness itself is
+  tested locally on synthetic LogChunks-shaped data and the six fixtures.
+- Day 3 also added the budget fill to selection, because the first eval run showed the
+  scored blocks under-spending the budget. Day 4's measurements use the dev split.

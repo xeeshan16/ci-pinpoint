@@ -8,9 +8,9 @@ of a 200,000-token log.
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-> Status: **day 2 of 7**, working end to end on real logs. Evaluation on a public
-> labelled dataset, the MCP server and the GitHub Action land later this week (see
-> [docs/PLAN.md](docs/PLAN.md)).
+> Status: **day 3 of 7**, working end to end on real logs and measured on a public
+> labelled dataset ([results](#evaluation)). The MCP server and the GitHub Action land
+> later this week (see [docs/PLAN.md](docs/PLAN.md)).
 
 ## What it does
 
@@ -145,8 +145,10 @@ flowchart LR
 ```
 
 1. **Normalise.** Strip timestamps, ANSI codes and progress-bar redraws; split on GitHub
-   `##[group]` and GitLab section markers; mark `##[error]` annotations and the script that
-   GitHub echoes before each step. Line numbers always refer to the raw log.
+   `##[group]`, GitLab section and Travis CI fold markers (each top-level Travis
+   `$ command` is a step); mark `##[error]` annotations, Travis's `The command "..." exited
+   with N.` and the script that GitHub echoes before each step. Line numbers always refer
+   to the raw log.
 2. **Mine templates.** A Drain-style miner groups lines into templates (a 15,687-line Maven
    log becomes 291 templates in about 0.15 s), so the tool knows which lines are the 8,000th
    copy of a progress bar and which line is unique.
@@ -158,9 +160,10 @@ flowchart LR
    lines (inside their step) become blocks, the tail of every failed step is always a
    candidate, runs of same-template filler are folded into one line plus a count, and
    blocks are chosen under a token budget, skipping blocks whose evidence templates were
-   already chosen. Optionally (`--embedder ollama|openai|auto`), blocks are re-ranked by
+   already chosen. Budget the scored blocks don't need goes to more of the failed step's
+   output, walking back from where it failed. Optionally (`--embedder ollama|openai|auto`), blocks are re-ranked by
    embedding similarity to common failure modes and to the failed step's symptom; this is
-   off by default because it did not help on the labelled logs so far (see
+   off by default because it has not helped on the labelled logs so far (see
    [docs/PROGRESS.md](docs/PROGRESS.md)).
 4. **Diagnose.** The model sees only the excerpt, fenced as untrusted data, and must answer
    in a fixed schema. Malformed answers get one repair round trip with the exact error.
@@ -170,11 +173,50 @@ flowchart LR
 
 Design decisions are recorded in [docs/adr](docs/adr).
 
+## Evaluation
+
+Does the excerpt contain the lines a human marked as the reason the build failed? Measured
+on [LogChunks](https://doi.org/10.5281/zenodo.3632351) (Brandt, Panichella, Zaidman and
+Beller, MSR 2020; CC BY 4.0): 797 real failed Travis CI logs from 80 open-source
+repositories, each with the failure-explaining chunk labelled by hand. 773 labels could be
+aligned to their log; 24 could not and are excluded and listed in the report. Results below
+are the **held-out test split** (584 logs from repositories that no change was judged on;
+see [ADR 0003](docs/adr/0003-evaluation-equal-budgets-aligned-labels-repository-split.md) for
+the caveat). Every strategy gets the same 2,000-token budget, counted the same way. No model
+is involved: this measures what the model gets to see.
+
+| strategy (2,000-token budget) | failure shown | line recall | whole failure shown | mean tokens used |
+|---|---|---|---|---|
+| `tail` (last lines that fit) | 69.7% | 64.5% | 60.8% | 1,983 |
+| `grep -iE 'error\|fail'` (last matches that fit) | 56.5% | 18.5% | 5.1% | 757 |
+| ci-pinpoint, scored blocks only (day 2) | 81.5% | 60.5% | 42.3% | 895 |
+| **ci-pinpoint** | **91.6%** | **78.3%** | **64.9%** | 1,613 |
+
+ci-pinpoint vs tail, paired difference in line recall: **+13.8 points** (95% bootstrap
+interval +10.4 to +17.2). Across all 773 logs: line recall 76.6% vs 65.6% for tail, and
+53.8% vs 41.3% at a 500-token budget. On the 189-log dev split the gain over tail is smaller
+and not significant (+2.3 points, interval -2.5 to +7.1). Source:
+[CI run 42822696413](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42822696413),
+ci-pinpoint at commit `54a50d2`, no model, deterministic.
+
+Reproduce it, or score your own labelled logs:
+
+```bash
+ci-pinpoint eval --fetch                    # downloads LogChunks from Zenodo into the cache
+ci-pinpoint eval --split test --budgets 500,1000,2000,4000
+ci-pinpoint eval --dataset manifest --data tests/fixtures/logs   # any manifest.json
+ci-pinpoint eval --diagnose 20 --provider ollama                 # also score model citations
+```
+
+Reports go to `reports/eval/eval.{md,json}` (per-log scores included). `--fail-under 0.75`
+makes it a CI gate on line recall.
+
 ## Development
 
 ```bash
 uv sync && uv run pytest && uv run ruff check . && uv run mypy
 uv run python scripts/fixture_report.py --provider fake   # six labelled real logs
+uv run ci-pinpoint eval --fetch --split dev               # LogChunks, the split to tune on
 ```
 
 The test fixtures are six unmodified failed GitHub Actions job logs from
@@ -184,9 +226,9 @@ labelled with the root-cause line(s); a test enforces that selection keeps those
 
 ## Limitations (today)
 
-- There is no evaluation on a public dataset yet (day 3). Six hand-labelled logs are a
-  smoke test, not a benchmark, and the day 2 selection changes were developed on those
-  same six logs, so they may be overfitted to them until the LogChunks eval says otherwise.
+- The public evaluation set is Travis CI logs from 2018 to 2019; the GitHub Actions
+  evidence is six hand-labelled logs. Line recall says the right lines reach the model, not
+  that the model explains them well; model-level numbers on LogChunks come next.
 - Embedding re-ranking exists but is off by default: with `nomic-embed-text` it did not
   improve ranking on the labelled logs.
 - Token counts are estimates (3.5 characters per token), not tokenizer-exact.
@@ -196,4 +238,5 @@ labelled with the root-cause line(s); a test enforces that selection keeps those
 
 ## License
 
-MIT. Fixture logs come from the MIT-licensed kafka-llm-enricher CI.
+MIT. Fixture logs come from the MIT-licensed kafka-llm-enricher CI. LogChunks is not
+included in this repository; `--fetch` downloads it from Zenodo under its CC BY 4.0 license.
