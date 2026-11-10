@@ -99,7 +99,8 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         "--fail-under",
         type=float,
         metavar="RECALL",
-        help="exit 1 if ci-pinpoint's line recall at the headline budget is below this (0-1)",
+        help="exit 1 if the pinpoint strategy's line recall at the headline budget is below "
+        "this (0-1)",
     )
     ev.add_argument("-v", "--verbose", action="count", default=0, help="log to stderr")
 
@@ -185,7 +186,12 @@ def run_eval(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err:
     print(markdown, file=out, end="")
 
     if args.fail_under is not None:
-        tool = next((n for n in names if n not in BASELINES), None)
+        # Gate on the shipped selection; ablations like pinpoint-nofill are for comparison.
+        tool = (
+            "pinpoint"
+            if "pinpoint" in names
+            else next((n for n in names if n not in BASELINES), None)
+        )
         if tool is not None:
             recall = summarise(results, tool, main_budget).mean_recall
             if recall < args.fail_under:

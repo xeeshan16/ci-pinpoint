@@ -329,6 +329,46 @@ def test_cli_eval_with_embeddings_and_threshold(tmp_path: Path) -> None:
     assert report["settings"]["embedder"]
 
 
+def test_cli_eval_gates_on_pinpoint_not_on_the_ablation(tmp_path: Path) -> None:
+    # The labelled line has no error words and sits 15 lines before the failure: only the
+    # budget fill reaches it, so pinpoint-nofill scores 0 and pinpoint scores 1.
+    output = ["out " * (i % 4 + 1) + "end" for i in range(30)]
+    output[14] = "the frobnicator returned seventeen"
+    log = "\n".join(
+        [
+            "##[group]Run make test",
+            "make test",
+            "##[endgroup]",
+            *output,
+            "##[error]Process completed with exit code 1.",
+        ]
+    )
+    (tmp_path / "a.log").write_text(log + "\n")
+    manifest = {"cases": [{"file": "a.log", "anchors": ["the frobnicator returned seventeen"]}]}
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    out_dir = tmp_path / "out"
+    args = ["eval", "--dataset", "manifest", "--data", str(tmp_path), "--out", str(out_dir)]
+    err = io.StringIO()
+    code = cli_run(
+        [
+            *args,
+            "--strategies",
+            "pinpoint-nofill,pinpoint",
+            "--budgets",
+            "2000",
+            "--fail-under",
+            "1.0",
+        ],
+        env={},
+        stdout=io.StringIO(),
+        stderr=err,
+    )
+    summary = json.loads((out_dir / "eval.json").read_text())["summary"]
+    assert summary["pinpoint-nofill"]["2000"]["mean_recall"] == 0.0
+    assert summary["pinpoint"]["2000"]["mean_recall"] == 1.0
+    assert code == 0, err.getvalue()
+
+
 @pytest.mark.parametrize(
     ("args", "message"),
     [
