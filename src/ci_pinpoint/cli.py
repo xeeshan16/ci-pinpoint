@@ -1,8 +1,8 @@
 """Command-line interface.
 
-Exit codes: 0 diagnosed (or excerpt printed with --no-llm), 1 the excerpt was
-built but the model could not produce a verified diagnosis, 2 bad input or
-configuration.
+Exit codes for ``explain``: 0 diagnosed (or excerpt printed with --no-llm), 1 the
+excerpt was built but the model could not produce a verified diagnosis, 2 bad input
+or configuration. ``eval`` returns 1 when ``--fail-under`` is not met.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import BinaryIO, TextIO
 from ci_pinpoint import __version__
 from ci_pinpoint.cache import BriefCache, CachedEmbedder, EmbeddingStore, default_cache_dir
 from ci_pinpoint.config import EMBEDDERS, PROVIDERS, ConfigError, load_settings
+from ci_pinpoint.evaluation import command as eval_command
 from ci_pinpoint.ingest import GitHubError, SourceError, load_sources
 from ci_pinpoint.logging_setup import configure
 from ci_pinpoint.pipeline import explain
@@ -64,6 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     ex.add_argument("--no-cache", action="store_true", help="ignore and don't write the cache")
     ex.add_argument("--show-excerpt", action="store_true", help="print the selected lines too")
     ex.add_argument("-v", "--verbose", action="count", default=0, help="log to stderr (-vv: debug)")
+    eval_command.add_parser(sub)
     return parser
 
 
@@ -89,6 +91,8 @@ def run(
     err = stderr or sys.stderr
     args = _parser().parse_args(argv)
     configure(args.verbose, env)
+    if args.command == "eval":
+        return eval_command.run_eval(args, env, out, err)
 
     store: EmbeddingStore | None = None
     try:

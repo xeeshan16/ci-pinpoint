@@ -1,4 +1,5 @@
 {
+  "name": "kafka-llm-enricher-fixtures",
   "description": "Real, unmodified GitHub Actions job logs from failed CI runs of the public repository xeeshan16/kafka-llm-enricher (MIT). Each case names the root-cause line(s) a reader needs to see: every anchor must appear in the excerpt that ci-pinpoint selects. Labels were written by hand from the full logs.",
   "license": "MIT (logs produced by xeeshan16/kafka-llm-enricher CI)",
   "cases": [
