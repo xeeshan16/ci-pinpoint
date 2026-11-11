@@ -10,6 +10,9 @@ on:
       split:
         description: repository split (all, dev, test)
         default: all
+      sample:
+        description: deterministic sample of N logs from the split (0 = all)
+        default: "0"
       embedder:
         description: none, or ollama to add the pinpoint+emb strategy
         default: none
@@ -33,7 +36,7 @@ permissions:
 jobs:
   logchunks:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     env:
       CI_PINPOINT_TIMEOUT_S: "900"
       CI_PINPOINT_MAX_RETRIES: "1"
@@ -70,6 +73,7 @@ jobs:
           fi
           if [ "${{ inputs.diagnose }}" != "0" ]; then args+=(--diagnose "${{ inputs.diagnose }}"); fi
           if [ "${{ inputs.rerank }}" = "true" ]; then args+=(--rerank --jobs 1); fi
+          if [ "${{ inputs.sample }}" != "0" ]; then args+=(--sample "${{ inputs.sample }}"); fi
           uv run ci-pinpoint eval "${args[@]}"
           cat reports/eval/eval.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

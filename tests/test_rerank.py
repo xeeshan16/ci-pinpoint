@@ -205,3 +205,34 @@ def test_eval_with_rerank_adds_the_strategy_and_variant_deltas(tmp_path: Path) -
     assert report["rerank"]["failures"] == 0
     assert report["logs_with_instruction_like_lines"] == 0
     assert "ci-pinpoint + LLM rerank" in out.getvalue()
+
+
+def test_eval_sample_is_deterministic(tmp_path: Path) -> None:
+    def ids() -> list[str]:
+        out, err = io.StringIO(), io.StringIO()
+        code = run(
+            [
+                "eval",
+                "--dataset",
+                "manifest",
+                "--data",
+                str(FIXTURES),
+                "--sample",
+                "3",
+                "--out",
+                str(tmp_path),
+                "--jobs",
+                "1",
+            ],
+            env={},
+            stdout=out,
+            stderr=err,
+        )
+        assert code == 0, err.getvalue()
+        report = json.loads((tmp_path / "eval.json").read_text())
+        assert report["settings"]["sample"] == 3
+        return [c["id"] for c in report["cases"]]
+
+    first = ids()
+    assert len(first) == 3
+    assert ids() == first

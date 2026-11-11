@@ -39,6 +39,7 @@ class RunInfo:
     model: str | None = None
     diagnose_limit: int | None = None
     reranker: str | None = None
+    sample: int | None = None
     rerank_stats: dict[str, float] | None = None
 
 
@@ -83,6 +84,7 @@ def build_report(dataset: Dataset, results: Sequence[CaseResult], info: RunInfo)
             "model": info.model,
             "diagnose_limit": info.diagnose_limit,
             "reranker": info.reranker,
+            "sample": info.sample,
         },
         "rerank": info.rerank_stats,
         "logs_with_instruction_like_lines": sum(1 for r in results if r.instruction_like_lines),
@@ -127,7 +129,9 @@ def render_markdown(report: dict[str, Any]) -> str:
     st = report["settings"]
     main = str(st["main_budget"])
     out = [
-        f"### ci-pinpoint eval: {ds['name']} ({ds['split']} split, {ds['cases']} logs)",
+        f"### ci-pinpoint eval: {ds['name']} ({ds['split']} split, {ds['cases']} logs"
+        + (", deterministic sample" if st.get("sample") else "")
+        + ")",
         "",
         f"Token budget {main} per log; every strategy is held to the same budget and the "
         "same token estimate. Recall is the share of the labelled failure lines that are shown.",

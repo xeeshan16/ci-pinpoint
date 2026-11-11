@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TextIO
 
@@ -19,7 +20,7 @@ from ci_pinpoint.evaluation.dataset import (
     load_manifest,
 )
 from ci_pinpoint.evaluation.fetch import fetch_logchunks
-from ci_pinpoint.evaluation.harness import DiagnoseOptions, run, summarise
+from ci_pinpoint.evaluation.harness import DiagnoseOptions, diagnosis_sample, run, summarise
 from ci_pinpoint.evaluation.report import RunInfo, build_report, render_markdown, to_json
 from ci_pinpoint.evaluation.strategies import BASELINES, STRATEGY_NAMES, build_strategies
 from ci_pinpoint.providers import build_chat, build_embedder
@@ -100,6 +101,12 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     ev.add_argument("--model", help="model name for --diagnose")
     ev.add_argument("--base-url", help="OpenAI-compatible base URL for --diagnose")
     ev.add_argument("--limit", type=int, help="only the first N labelled logs (quick runs)")
+    ev.add_argument(
+        "--sample",
+        type=int,
+        metavar="N",
+        help="a deterministic, repository-spread sample of N logs (for slow model strategies)",
+    )
     ev.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="worker processes")
     ev.add_argument("--out", type=Path, default=Path("reports/eval"), help="report directory")
     ev.add_argument(
@@ -159,6 +166,8 @@ def run_eval(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err:
         )
         strategies = build_strategies(names, ranker, llm_ranker)
         dataset = _load(args, env)
+        if args.sample:
+            dataset = replace(dataset, cases=tuple(diagnosis_sample(dataset.cases, args.sample)))
     except (ConfigError, DatasetError, ValueError) as exc:
         print(f"ci-pinpoint: {exc}", file=err)
         return EXIT_USAGE
@@ -200,6 +209,7 @@ def run_eval(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err:
         model=chat.model if chat and args.diagnose > 0 else None,
         diagnose_limit=args.diagnose or None,
         reranker=llm_ranker.model if llm_ranker else None,
+        sample=args.sample,
         rerank_stats=_rerank_stats(llm_ranker) if llm_ranker else None,
     )
     report = build_report(dataset, results, info)
