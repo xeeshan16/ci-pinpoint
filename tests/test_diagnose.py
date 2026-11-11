@@ -254,14 +254,26 @@ def test_diagnose_sends_the_schema() -> None:
     _run(chat)
     schema = chat.schemas[0]
     assert schema is not None
+    # Generation order under constrained decoding: evidence before the category.
     assert schema["required"] == [
-        "category",
         "summary",
         "root_cause",
         "citations",
+        "category",
         "suggested_fix",
         "confidence",
     ]
+    assert list(schema["properties"]) == schema["required"]
+
+
+def test_a_cited_prefix_of_a_long_line_verifies() -> None:
+    line = "[ERROR] " + "x" * 300 + " Caused by: something"
+    log = normalize(f"ok\n{line}")
+    verified, rejected = verify_citations(
+        [Citation(line=2, text=line[:120])], log.by_number(), {1, 2}
+    )
+    assert [c.line for c in verified] == [2]
+    assert rejected == []
 
 
 def test_truncated_reply_is_not_mistaken_for_an_inner_object() -> None:

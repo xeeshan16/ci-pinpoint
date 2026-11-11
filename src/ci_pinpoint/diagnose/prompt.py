@@ -17,16 +17,18 @@ from ci_pinpoint.providers.base import Message
 from ci_pinpoint.taxonomy import prompt_section
 from ci_pinpoint.tokens import clip_line
 
-PROMPT_VERSION = "diagnose-v3"
+PROMPT_VERSION = "diagnose-v4"
 
 # Sent as a structured-output schema to providers that support constrained
 # decoding (OpenAI, Azure, Ollama, vLLM). Kept to the subset of JSON Schema
 # that strict mode accepts; length and range limits are enforced by pydantic.
+# Key order is generation order under constrained decoding: the model states the
+# cause and cites evidence before it picks a category, instead of committing to a
+# category first (day 4 runs: "compile" for 4 of 6 non-compile failures).
 DIAGNOSIS_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "category": {"type": "string", "enum": [c.value for c in FailureCategory]},
         "summary": {"type": "string"},
         "root_cause": {"type": "string"},
         "citations": {
@@ -38,18 +40,26 @@ DIAGNOSIS_SCHEMA: dict[str, object] = {
                 "required": ["line", "text"],
             },
         },
+        "category": {"type": "string", "enum": [c.value for c in FailureCategory]},
         "suggested_fix": {"type": "string"},
         "confidence": {"type": "number"},
     },
-    "required": ["category", "summary", "root_cause", "citations", "suggested_fix", "confidence"],
+    "required": ["summary", "root_cause", "citations", "category", "suggested_fix", "confidence"],
 }
 
+CITATION_CHARS = 120
+
 _SCHEMA_HINT = {
-    "category": " | ".join(c.value for c in FailureCategory),
     "summary": "one sentence a developer reads first (max 300 chars)",
     "root_cause": "what actually broke and why, in at most 3 sentences; refer to lines "
     "by number instead of pasting them",
-    "citations": [{"line": "<number from the L prefix>", "text": "<that line, copied verbatim>"}],
+    "citations": [
+        {
+            "line": "<number from the L prefix>",
+            "text": f"<that line copied verbatim, at most its first {CITATION_CHARS} characters>",
+        }
+    ],
+    "category": "the category that names the cause (see the list above)",
     "suggested_fix": "the concrete next step: a command, a file to change, a setting",
     "confidence": "0.0 to 1.0",
 }
@@ -81,13 +91,19 @@ Rules for citations:
 - Cite 1 to 5 lines that prove the root cause, most important first. Prefer the
   line that states the cause over "exit code" lines and stack frames.
 - "line" must be a number shown in the excerpt; "text" must be that line copied verbatim.
+  For a long line, copy only its first {citation_chars} characters.
 - Do not cite lines that are not in the excerpt. Uncheckable citations are discarded.
 """
 _SCHEMA_TEXT = json.dumps(_SCHEMA_HINT, indent=2)
 
 
 def system_prompt(fence: str) -> str:
-    return _SYSTEM_TEMPLATE.format(fence=fence, schema=_SCHEMA_TEXT, taxonomy=prompt_section())
+    return _SYSTEM_TEMPLATE.format(
+        fence=fence,
+        schema=_SCHEMA_TEXT,
+        taxonomy=prompt_section(),
+        citation_chars=CITATION_CHARS,
+    )
 
 
 # The system prompt with a placeholder fence, for documentation and tests.
