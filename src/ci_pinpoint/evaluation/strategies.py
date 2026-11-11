@@ -12,6 +12,8 @@ clipped the same way), so the comparison is about *which* lines are chosen.
 * ``pinpoint-nofill``: the same without spending leftover budget on the failed
   step's output (the selection before day 3), kept as an ablation.
 * ``pinpoint+emb``: the same, with blocks re-ranked by an embedding model.
+* ``pinpoint+llm``: the same, with blocks re-ranked by a chat model
+  (:mod:`ci_pinpoint.rerank`).
 
 The baselines run on the cleaned log (no ANSI codes or timestamps), which makes
 them cheaper and therefore stronger than running them on the raw bytes.
@@ -85,11 +87,16 @@ class PinpointStrategy:
     """ci-pinpoint's own selection stage, optionally with an embedding re-ranker."""
 
     def __init__(
-        self, ranker: BlockRanker | None = None, name: str | None = None, *, fill: bool = True
+        self,
+        ranker: BlockRanker | None = None,
+        name: str | None = None,
+        *,
+        fill: bool = True,
+        kind: str = "emb",
     ) -> None:
         self.ranker = ranker
         self.fill = fill
-        default = "pinpoint+emb" if ranker is not None else "pinpoint"
+        default = f"pinpoint+{kind}" if ranker is not None else "pinpoint"
         self.name = name or (default if fill else f"{default}-nofill")
 
     def select(self, log: NormalizedLog, budgets: Sequence[int]) -> dict[int, Selection]:
@@ -107,8 +114,12 @@ class PinpointStrategy:
 BASELINES = ("tail", "grep")
 
 
-def build_strategies(names: Sequence[str], ranker: BlockRanker | None = None) -> list[Strategy]:
-    """Strategies by name. ``pinpoint+emb`` needs a ranker."""
+def build_strategies(
+    names: Sequence[str],
+    ranker: BlockRanker | None = None,
+    llm_ranker: BlockRanker | None = None,
+) -> list[Strategy]:
+    """Strategies by name. ``pinpoint+emb`` needs a ranker, ``pinpoint+llm`` an LLM ranker."""
     out: list[Strategy] = []
     for name in names:
         if name == "tail":
@@ -123,9 +134,13 @@ def build_strategies(names: Sequence[str], ranker: BlockRanker | None = None) ->
             if ranker is None:
                 raise ValueError("pinpoint+emb needs an embedder (--embedder)")
             out.append(PinpointStrategy(ranker))
+        elif name == "pinpoint+llm":
+            if llm_ranker is None:
+                raise ValueError("pinpoint+llm needs a chat model (--rerank with --provider)")
+            out.append(PinpointStrategy(llm_ranker, kind="llm"))
         else:
             raise ValueError(f"unknown strategy {name!r}")
     return out
 
 
-STRATEGY_NAMES = ("tail", "grep", "pinpoint", "pinpoint-nofill", "pinpoint+emb")
+STRATEGY_NAMES = ("tail", "grep", "pinpoint", "pinpoint-nofill", "pinpoint+emb", "pinpoint+llm")

@@ -24,6 +24,7 @@ LABELS = {
     "pinpoint": "ci-pinpoint selection",
     "pinpoint-nofill": "ci-pinpoint, no budget fill",
     "pinpoint+emb": "ci-pinpoint + embeddings",
+    "pinpoint+llm": "ci-pinpoint + LLM rerank",
 }
 
 
@@ -37,6 +38,8 @@ class RunInfo:
     provider: str | None = None
     model: str | None = None
     diagnose_limit: int | None = None
+    reranker: str | None = None
+    rerank_stats: dict[str, float] | None = None
 
 
 def build_report(dataset: Dataset, results: Sequence[CaseResult], info: RunInfo) -> dict[str, Any]:
@@ -50,6 +53,14 @@ def build_report(dataset: Dataset, results: Sequence[CaseResult], info: RunInfo)
         for tool in tools
         for base in info.strategies
         if base in BASELINES
+    ]
+    # Variants of ci-pinpoint against each other, at every budget: re-ranking
+    # matters most when the budget is small.
+    variants = [
+        asdict(paired_delta(results, a, b, budget))
+        for i, a in enumerate(tools)
+        for b in tools[:i]
+        for budget in info.budgets
     ]
     diagnosis = summarise_diagnosis(results)
     return {
@@ -71,9 +82,13 @@ def build_report(dataset: Dataset, results: Sequence[CaseResult], info: RunInfo)
             "provider": info.provider,
             "model": info.model,
             "diagnose_limit": info.diagnose_limit,
+            "reranker": info.reranker,
         },
+        "rerank": info.rerank_stats,
+        "logs_with_instruction_like_lines": sum(1 for r in results if r.instruction_like_lines),
         "summary": summary,
         "recall_deltas": deltas,
+        "variant_deltas": variants,
         "diagnosis": asdict(diagnosis) if diagnosis else None,
         "unlocated": [asdict(u) for u in dataset.unlocated],
         "cases": [
@@ -86,6 +101,7 @@ def build_report(dataset: Dataset, results: Sequence[CaseResult], info: RunInfo)
                 "raw_tokens": r.raw_tokens,
                 "label_lines": r.label_lines,
                 "requirements": r.requirements,
+                "instruction_like_lines": r.instruction_like_lines,
                 "scores": {
                     name: {str(b): asdict(s) for b, s in by_budget.items()}
                     for name, by_budget in r.scores.items()
@@ -141,6 +157,28 @@ def render_markdown(report: dict[str, Any]) -> str:
         for name in st["strategies"]:
             cells = " | ".join(_pct(report["summary"][name][b]["mean_recall"]) for b in budgets)
             out.append(f"| {LABELS.get(name, name)} | {cells} |")
+    if report.get("variant_deltas"):
+        out += [
+            "",
+            "Paired difference in line recall between ci-pinpoint variants, by budget "
+            "(95% bootstrap interval):",
+            "",
+        ]
+        for d in report["variant_deltas"]:
+            out.append(
+                f"- {LABELS.get(d['a'], d['a'])} vs {LABELS.get(d['b'], d['b'])} at "
+                f"{d['budget']}: {100 * d['mean']:+.1f} points "
+                f"[{100 * d['low']:+.1f}, {100 * d['high']:+.1f}]"
+            )
+    rr = report.get("rerank")
+    if rr:
+        out += [
+            "",
+            f"LLM rerank ({st['reranker']}): {rr['calls']:.0f} calls, {rr['failures']:.0f} fell "
+            f"back to heuristic order, mean {rr['mean_latency_s']:.1f} s and "
+            f"{rr['mean_input_tokens']:.0f} / {rr['mean_output_tokens']:.0f} tokens per call "
+            "(logs with fewer than two non-tail candidates need no call).",
+        ]
     diag = report.get("diagnosis")
     if diag:
         out += [
@@ -159,6 +197,9 @@ def render_markdown(report: dict[str, Any]) -> str:
     out += [
         "",
         f"Labels that could not be matched to their log: {ds['unlocated']} (excluded).",
+        "Logs with lines flagged as instruction-like (prompt-injection detector; none of "
+        "these logs are known to contain an injection): "
+        f"{report.get('logs_with_instruction_like_lines', 0)} of {ds['cases']}.",
         f"Dataset: {ds['citation'].rstrip('.')}. License: {ds['license']}.",
         f"ci-pinpoint {report['tool']['version']}, {report['created']}.",
     ]

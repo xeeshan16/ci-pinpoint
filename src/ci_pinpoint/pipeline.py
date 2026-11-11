@@ -21,8 +21,9 @@ from ci_pinpoint.models import (
 )
 from ci_pinpoint.normalize import normalize
 from ci_pinpoint.providers.base import ChatModel, ProviderError
-from ci_pinpoint.ranking import EmbeddingRanker
 from ci_pinpoint.redact import redact_log
+from ci_pinpoint.rerank import PROMPT_VERSION as RERANK_PROMPT_VERSION
+from ci_pinpoint.rerank import NamedRanker
 from ci_pinpoint.tokens import estimate_lines_tokens
 
 log = logging.getLogger(__name__)
@@ -54,9 +55,7 @@ def _blocks_out(excerpt: Excerpt) -> list[ExcerptBlockOut]:
     ]
 
 
-def _cache_key(
-    raw: RawLog, settings: Settings, chat: ChatModel, ranker: EmbeddingRanker | None
-) -> str:
+def _cache_key(raw: RawLog, settings: Settings, chat: ChatModel, ranker: NamedRanker | None) -> str:
     return brief_key(
         raw.text,
         {
@@ -64,6 +63,7 @@ def _cache_key(
             "provider": chat.provider,
             "model": chat.model,
             "prompt": PROMPT_VERSION,
+            "rerank_prompt": RERANK_PROMPT_VERSION,
             "embedder": ranker.model if ranker else None,
             "max_output_tokens": settings.max_output_tokens,
             "repair_attempts": settings.repair_attempts,
@@ -78,7 +78,7 @@ def explain(
     settings: Settings,
     chat: ChatModel | None,
     *,
-    ranker: EmbeddingRanker | None = None,
+    ranker: NamedRanker | None = None,
     cache: BriefCache | None = None,
 ) -> Brief:
     """Normalise, select an excerpt and (if a model is given) diagnose one log.

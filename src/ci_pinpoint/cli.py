@@ -26,6 +26,7 @@ from ci_pinpoint.pipeline import explain
 from ci_pinpoint.providers import ChatModel, build_chat, build_embedder
 from ci_pinpoint.ranking import EmbeddingRanker
 from ci_pinpoint.render import FORMATS, render
+from ci_pinpoint.rerank import ChainRanker, LLMRanker, NamedRanker
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,12 @@ def _parser() -> argparse.ArgumentParser:
         help="embedder for block ranking: none (default), auto (follows --provider), ollama, ...",
     )
     ex.add_argument("--embed-model", help="embedding model name, e.g. nomic-embed-text")
+    ex.add_argument(
+        "--rerank",
+        action="store_true",
+        default=None,
+        help="let the chat model re-rank candidate blocks before selection (one extra call)",
+    )
     ex.add_argument("--no-llm", action="store_true", help="only select and print the log lines")
     ex.add_argument("--no-cache", action="store_true", help="ignore and don't write the cache")
     ex.add_argument(
@@ -112,6 +119,7 @@ def run(
                 "embedder": args.embedder,
                 "embed_model": args.embed_model,
                 "redact": False if args.no_redact else None,
+                "rerank": args.rerank,
             },
         )
         chat: ChatModel | None = None if args.no_llm else build_chat(settings, env)
@@ -121,7 +129,14 @@ def run(
         store = _open_store(cache_root) if embedder is not None and use_cache else None
         if embedder is not None and store is not None:
             embedder = CachedEmbedder(embedder, store)
-        ranker = EmbeddingRanker(embedder) if embedder is not None else None
+        rankers: list[NamedRanker] = []
+        if embedder is not None:
+            rankers.append(EmbeddingRanker(embedder))
+        if settings.rerank and chat is not None:
+            rankers.append(LLMRanker(chat))
+        ranker: NamedRanker | None = (
+            None if not rankers else rankers[0] if len(rankers) == 1 else ChainRanker(rankers)
+        )
         cache = BriefCache(cache_root) if use_cache else None
         raws = load_sources(
             args.source,

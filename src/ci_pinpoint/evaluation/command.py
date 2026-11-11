@@ -24,6 +24,7 @@ from ci_pinpoint.evaluation.report import RunInfo, build_report, render_markdown
 from ci_pinpoint.evaluation.strategies import BASELINES, STRATEGY_NAMES, build_strategies
 from ci_pinpoint.providers import build_chat, build_embedder
 from ci_pinpoint.ranking import EmbeddingRanker
+from ci_pinpoint.rerank import LLMRanker
 
 log = logging.getLogger(__name__)
 
@@ -78,10 +79,16 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     ev.add_argument(
         "--strategies",
         type=_names,
-        help="comma-separated: tail,grep,pinpoint (default) and pinpoint+emb",
+        help="comma-separated: tail,grep,pinpoint (default), pinpoint-nofill, pinpoint+emb, "
+        "pinpoint+llm",
     )
     ev.add_argument("--embedder", choices=EMBEDDERS, help="adds pinpoint+emb when set")
     ev.add_argument("--embed-model", help="embedding model name, e.g. nomic-embed-text")
+    ev.add_argument(
+        "--rerank",
+        action="store_true",
+        help="adds pinpoint+llm: candidate blocks re-ranked by the chat model (--provider)",
+    )
     ev.add_argument(
         "--diagnose",
         type=int,
@@ -116,6 +123,17 @@ def _load(args: argparse.Namespace, env: Mapping[str, str]) -> Dataset:
     return load_logchunks(data, args.split, args.limit)
 
 
+def _rerank_stats(ranker: LLMRanker) -> dict[str, float]:
+    calls = max(1, ranker.calls)
+    return {
+        "calls": ranker.calls,
+        "failures": ranker.failures,
+        "mean_latency_s": round(ranker.latency_s / calls, 2),
+        "mean_input_tokens": round(ranker.usage.input_tokens / calls, 1),
+        "mean_output_tokens": round(ranker.usage.output_tokens / calls, 1),
+    }
+
+
 def run_eval(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO) -> int:
     try:
         settings = load_settings(
@@ -131,11 +149,15 @@ def run_eval(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err:
         )
         embedder = build_embedder(settings, env)
         ranker = EmbeddingRanker(embedder) if embedder is not None else None
+        chat = build_chat(settings, env) if args.diagnose > 0 or args.rerank else None
+        llm_ranker = LLMRanker(chat) if args.rerank and chat is not None else None
         names = args.strategies or (
-            (*BASELINES, "pinpoint", "pinpoint+emb") if ranker else (*BASELINES, "pinpoint")
+            *BASELINES,
+            "pinpoint",
+            *(("pinpoint+emb",) if ranker else ()),
+            *(("pinpoint+llm",) if llm_ranker else ()),
         )
-        strategies = build_strategies(names, ranker)
-        chat = build_chat(settings, env) if args.diagnose > 0 else None
+        strategies = build_strategies(names, ranker, llm_ranker)
         dataset = _load(args, env)
     except (ConfigError, DatasetError, ValueError) as exc:
         print(f"ci-pinpoint: {exc}", file=err)
@@ -155,7 +177,7 @@ def run_eval(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err:
             repair_attempts=settings.repair_attempts,
             ranker=ranker,
         )
-        if chat is not None
+        if chat is not None and args.diagnose > 0
         else None
     )
     results = run(
@@ -174,9 +196,11 @@ def run_eval(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err:
         main_budget=main_budget,
         strategies=tuple(names),
         embedder=ranker.model if ranker else None,
-        provider=chat.provider if chat else None,
-        model=chat.model if chat else None,
+        provider=chat.provider if chat and args.diagnose > 0 else None,
+        model=chat.model if chat and args.diagnose > 0 else None,
         diagnose_limit=args.diagnose or None,
+        reranker=llm_ranker.model if llm_ranker else None,
+        rerank_stats=_rerank_stats(llm_ranker) if llm_ranker else None,
     )
     report = build_report(dataset, results, info)
     markdown = render_markdown(report)

@@ -22,10 +22,31 @@ from ci_pinpoint.taxonomy import heuristic_category
 from ci_pinpoint.tokens import estimate_tokens
 
 EXCERPT_LINE = re.compile(r"^L(\d+): (.*)$", re.MULTILINE)
+CANDIDATE_HEADER = re.compile(r"^\[(\d+)\] lines ")
+
+
+def _fake_ranking(prompt: str) -> list[int]:
+    """Candidates ordered by their strongest line's heuristic score."""
+    best: dict[int, float] = {}
+    current: int | None = None
+    for line in prompt.splitlines():
+        header = CANDIDATE_HEADER.match(line)
+        if header:
+            current = int(header.group(1))
+            best[current] = 0.0
+            continue
+        match = EXCERPT_LINE.match(line)
+        if current is not None and match:
+            best[current] = max(best[current], score_text(match.group(2))[0])
+    return sorted(best, key=lambda n: (-best[n], n))
 
 
 class FakeChat:
-    """Heuristic stand-in for a model. Deterministic for a given prompt."""
+    """Heuristic stand-in for a model. Deterministic for a given prompt.
+
+    Answers diagnosis prompts with a diagnosis and re-rank prompts (a schema
+    with a ``ranking`` property) with candidates ordered by heuristic score.
+    """
 
     def __init__(self, model: str = "fake-diagnoser") -> None:
         self._model = model
@@ -48,6 +69,19 @@ class FakeChat:
         json_schema: Mapping[str, Any] | None = None,
     ) -> Completion:
         prompt = messages[-1].content if messages else ""
+        properties = (json_schema or {}).get("properties")
+        if isinstance(properties, Mapping) and "ranking" in properties:
+            text = json.dumps({"ranking": _fake_ranking(prompt)})
+            return Completion(
+                text=text,
+                model=self._model,
+                usage=TokenUsage(
+                    input_tokens=sum(estimate_tokens(m.content) for m in messages),
+                    output_tokens=estimate_tokens(text),
+                ),
+                latency_s=0.0,
+                finish_reason="stop",
+            )
         excerpt = [(int(n), text) for n, text in EXCERPT_LINE.findall(prompt)]
         ranked = sorted(excerpt, key=lambda item: (-score_text(item[1])[0], item[0]))
         top = [item for item in ranked if score_text(item[1])[0] > 0][:3] or ranked[:1]

@@ -29,6 +29,7 @@ from ci_pinpoint.diagnose import DiagnosisFailedError, diagnose
 from ci_pinpoint.evaluation.dataset import Case
 from ci_pinpoint.evaluation.strategies import PinpointStrategy, Selection, Strategy
 from ci_pinpoint.heuristics import BlockRanker, build_excerpt
+from ci_pinpoint.injection import flag_lines
 from ci_pinpoint.models import NormalizedLog
 from ci_pinpoint.normalize import normalize
 from ci_pinpoint.providers.base import ChatModel, ProviderError
@@ -72,6 +73,7 @@ class CaseResult:
     raw_tokens: int
     label_lines: int
     requirements: int
+    instruction_like_lines: int = 0
     scores: dict[str, dict[int, Score]] = field(default_factory=dict)
     diagnosis: DiagnosisScore | None = None
 
@@ -111,6 +113,7 @@ def evaluate_case(case: Case, strategies: Sequence[Strategy], budgets: Sequence[
         raw_tokens=estimate_lines_tokens(line.text for line in log_.lines),
         label_lines=len(case.label_lines),
         requirements=len(case.requirements),
+        instruction_like_lines=len(flag_lines(log_.lines)),
     )
     for strategy in strategies:
         selections = strategy.select(log_, budgets)
