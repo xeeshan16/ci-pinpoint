@@ -234,3 +234,8 @@ class Brief(BaseModel):
         default=None, description="Embedding model that re-ranked the blocks, if any."
     )
     cached: bool = False
+    redactions: dict[str, int] = Field(
+        default_factory=dict,
+        description="Secrets replaced with [REDACTED:<kind>] before anything was selected "
+        "or sent to a model, counted by kind. The values are never kept.",
+    )

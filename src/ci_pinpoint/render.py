@@ -46,6 +46,14 @@ def _title(brief: Brief) -> str:
     return brief.job_name or brief.source
 
 
+def _redactions(brief: Brief) -> str | None:
+    if not brief.redactions:
+        return None
+    total = sum(brief.redactions.values())
+    kinds = ", ".join(f"{k} x{v}" if v > 1 else k for k, v in brief.redactions.items())
+    return f"{total} secret(s) redacted before analysis: {kinds}"
+
+
 def _reduction(brief: Brief) -> str:
     s = brief.stats
     text = (
@@ -101,6 +109,8 @@ def render_text(brief: Brief, *, show_excerpt: bool = False) -> str:
     else:
         show_excerpt = True
     out += ["", f"  excerpt: {_reduction(brief)}"]
+    if (redacted := _redactions(brief)) is not None:
+        out.append(f"  {redacted}")
     if show_excerpt:
         out += ["", *[f"  {line}" for line in _excerpt_lines(brief)]]
     return "\n".join(out)
@@ -135,6 +145,8 @@ def render_markdown(brief: Brief, *, show_excerpt: bool = True) -> str:
     elif brief.error:
         out += ["", f"> diagnosis failed: {brief.error}"]
     out += ["", f"_Excerpt: {_reduction(brief)}._"]
+    if (redacted := _redactions(brief)) is not None:
+        out.append(f"_{redacted}._")
     if show_excerpt and brief.excerpt:
         out += [
             "",

@@ -32,6 +32,7 @@ from ci_pinpoint.heuristics import BlockRanker, build_excerpt
 from ci_pinpoint.models import NormalizedLog
 from ci_pinpoint.normalize import normalize
 from ci_pinpoint.providers.base import ChatModel, ProviderError
+from ci_pinpoint.redact import redact_log
 from ci_pinpoint.tokens import estimate_lines_tokens
 
 log = logging.getLogger(__name__)
@@ -128,7 +129,8 @@ def diagnosis_sample(cases: Sequence[Case], limit: int) -> list[Case]:
 
 
 def score_diagnosis(case: Case, budget: int, options: DiagnoseOptions) -> DiagnosisScore:
-    log_ = normalize(case.text())
+    # The same redaction as ``explain``: line numbers are unchanged, so labels still apply.
+    log_, _ = redact_log(normalize(case.text()))
     excerpt = build_excerpt(log_, budget, options.ranker)
     try:
         result = diagnose(

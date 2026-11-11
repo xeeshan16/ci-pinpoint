@@ -63,6 +63,11 @@ def _parser() -> argparse.ArgumentParser:
     ex.add_argument("--embed-model", help="embedding model name, e.g. nomic-embed-text")
     ex.add_argument("--no-llm", action="store_true", help="only select and print the log lines")
     ex.add_argument("--no-cache", action="store_true", help="ignore and don't write the cache")
+    ex.add_argument(
+        "--no-redact",
+        action="store_true",
+        help="don't redact secrets (tokens, keys, passwords) from the log before using it",
+    )
     ex.add_argument("--show-excerpt", action="store_true", help="print the selected lines too")
     ex.add_argument("-v", "--verbose", action="count", default=0, help="log to stderr (-vv: debug)")
     eval_command.add_parser(sub)
@@ -106,6 +111,7 @@ def run(
                 "timeout_s": args.timeout_s,
                 "embedder": args.embedder,
                 "embed_model": args.embed_model,
+                "redact": False if args.no_redact else None,
             },
         )
         chat: ChatModel | None = None if args.no_llm else build_chat(settings, env)

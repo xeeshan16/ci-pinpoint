@@ -21,6 +21,7 @@ from ci_pinpoint.models import (
 from ci_pinpoint.normalize import normalize
 from ci_pinpoint.providers.base import ChatModel, ProviderError
 from ci_pinpoint.ranking import EmbeddingRanker
+from ci_pinpoint.redact import redact_log
 from ci_pinpoint.tokens import estimate_lines_tokens
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def _cache_key(
             "max_output_tokens": settings.max_output_tokens,
             "repair_attempts": settings.repair_attempts,
             "failed_steps": list(raw.failed_steps),
+            "redact": settings.redact,
         },
     )
 
@@ -93,6 +95,14 @@ def explain(
             )
 
     normalized = normalize(raw.text)
+    redactions: dict[str, int] = {}
+    if settings.redact:
+        normalized, redactions = redact_log(normalized)
+        if redactions:
+            log.warning(
+                "secrets redacted from the log",
+                extra={"source": raw.source, "redactions": redactions},
+            )
     excerpt = build_excerpt(normalized, settings.budget_tokens, ranker)
     stats = _stats(normalized, excerpt)
     brief = Brief(
@@ -104,6 +114,7 @@ def explain(
         excerpt=_blocks_out(excerpt),
         diagnosis=None,
         ranked_with=ranker.model if ranker and ranker.error is None else None,
+        redactions=redactions,
     )
     log.info(
         "excerpt selected",

@@ -4,7 +4,8 @@ Config file: ``.ci-pinpoint.toml`` in the working directory, or the path in
 ``CI_PINPOINT_CONFIG``. Keys mirror the environment variables without the
 ``CI_PINPOINT_`` prefix, lower-cased (``provider``, ``model``, ``base_url``,
 ``budget_tokens``, ``timeout_s``, ``max_retries``, ``max_output_tokens``,
-``repair_attempts``, ``embedder``, ``embed_model``, ``cache_dir``).
+``repair_attempts``, ``embedder``, ``embed_model``, ``rerank``, ``redact``,
+``cache_dir``).
 """
 
 from __future__ import annotations
@@ -44,6 +45,10 @@ class Settings:
     # beat heuristics (docs/PROGRESS.md, day 2). The LogChunks eval decides.
     embedder: str = "none"
     embed_model: str | None = None
+    # Off by default until the dev-split eval shows it helps (docs/PROGRESS.md, day 4).
+    rerank: bool = False
+    # Secrets are redacted from every log line before selection, prompts and output.
+    redact: bool = True
     cache_dir: str | None = None
     github_api_url: str = "https://api.github.com"
 
@@ -78,6 +83,8 @@ _ENV_KEYS = {
     "repair_attempts": "CI_PINPOINT_REPAIR_ATTEMPTS",
     "embedder": "CI_PINPOINT_EMBEDDER",
     "embed_model": "CI_PINPOINT_EMBED_MODEL",
+    "rerank": "CI_PINPOINT_RERANK",
+    "redact": "CI_PINPOINT_REDACT",
     "cache_dir": "CI_PINPOINT_CACHE_DIR",
     "github_api_url": "GITHUB_API_URL",
 }
@@ -86,6 +93,15 @@ _ENV_KEYS = {
 def _coerce(name: str, value: Any) -> Any:
     types = {f.name: f.type for f in fields(Settings)}
     kind = str(types[name])
+    if kind == "bool":
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off"):
+            return False
+        raise ConfigError(f"{name} must be true or false, got {value!r}")
     try:
         if kind == "int":
             return int(value)
