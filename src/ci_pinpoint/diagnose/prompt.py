@@ -14,6 +14,7 @@ from ci_pinpoint.heuristics import elision_text
 from ci_pinpoint.injection import defuse, new_fence
 from ci_pinpoint.models import Excerpt, FailureCategory
 from ci_pinpoint.providers.base import Message
+from ci_pinpoint.taxonomy import prompt_section
 from ci_pinpoint.tokens import clip_line
 
 PROMPT_VERSION = "diagnose-v3"
@@ -70,6 +71,8 @@ How to read the excerpt:
   Look for the earliest line that explains it: the deepest "Caused by", the first
   compiler error, the failing assertion, the refused connection, the missing value.
 
+{taxonomy}
+
 Answer with one flat JSON object and nothing else, with exactly these keys
 (every value is a plain string or number except "citations", which is a list):
 {schema}
@@ -84,7 +87,7 @@ _SCHEMA_TEXT = json.dumps(_SCHEMA_HINT, indent=2)
 
 
 def system_prompt(fence: str) -> str:
-    return _SYSTEM_TEMPLATE.format(fence=fence, schema=_SCHEMA_TEXT)
+    return _SYSTEM_TEMPLATE.format(fence=fence, schema=_SCHEMA_TEXT, taxonomy=prompt_section())
 
 
 # The system prompt with a placeholder fence, for documentation and tests.

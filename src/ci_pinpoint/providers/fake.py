@@ -16,54 +16,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from ci_pinpoint.heuristics import score_text
-from ci_pinpoint.models import FailureCategory, TokenUsage
+from ci_pinpoint.models import TokenUsage
 from ci_pinpoint.providers.base import Completion, Message
+from ci_pinpoint.taxonomy import heuristic_category
 from ci_pinpoint.tokens import estimate_tokens
 
 EXCERPT_LINE = re.compile(r"^L(\d+): (.*)$", re.MULTILINE)
-
-_CATEGORY_RULES: tuple[tuple[re.Pattern[str], FailureCategory], ...] = (
-    (
-        re.compile(
-            r"not formatted|format violations|spotless|prettier|black|ruff format|lint", re.I
-        ),
-        FailureCategory.LINT_FORMAT,
-    ),
-    (
-        re.compile(r"connection refused|ECONNREFUSED|could not resolve|5432|network", re.I),
-        FailureCategory.INFRASTRUCTURE,
-    ),
-    (
-        re.compile(r"OutOfMemory|OOMKilled|out of memory|exit code 137", re.I),
-        FailureCategory.RESOURCE,
-    ),
-    (re.compile(r"timed? ?out|deadline exceeded", re.I), FailureCategory.TIMEOUT),
-    (re.compile(r"permission denied|forbidden|unauthori[sz]ed", re.I), FailureCategory.PERMISSION),
-    (
-        re.compile(r"could not resolve dependencies|ModuleNotFoundError|No matching version", re.I),
-        FailureCategory.DEPENDENCY,
-    ),
-    (
-        re.compile(r"error(?:\[\w+\])?:|cannot find symbol|compilation", re.I),
-        FailureCategory.COMPILE,
-    ),
-    (
-        re.compile(r"FAILED|<<< FAILURE|AssertionError|Tests run:.*Failures: [1-9]|MISSING", re.I),
-        FailureCategory.TEST,
-    ),
-    (
-        re.compile(r"invalid|unknown|requirement failed|advertised\.listeners", re.I),
-        FailureCategory.CONFIGURATION,
-    ),
-)
-
-
-def _category(lines: Iterable[str]) -> FailureCategory:
-    joined = "\n".join(lines)
-    for pattern, category in _CATEGORY_RULES:
-        if pattern.search(joined):
-            return category
-    return FailureCategory.OTHER
 
 
 class FakeChat:
@@ -99,7 +57,7 @@ class FakeChat:
         ]
         lead = top[0][1].strip() if top else "the log is empty"
         body = {
-            "category": _category(text for _, text in top).value,
+            "category": heuristic_category(text for _, text in top).value,
             "summary": f"[fake provider] {lead[:200]}",
             "root_cause": "[fake provider] Heuristic pick of the strongest error lines; "
             "configure a real model for an actual diagnosis.",
