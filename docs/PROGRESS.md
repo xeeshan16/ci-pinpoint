@@ -256,3 +256,110 @@ rerank.
 **Next (Day 4):** LLM rerank of candidate blocks, a failure-category taxonomy, prompt-
 injection hardening with a test suite, secret redaction before any prompt, measured on the
 dev split against embedding-only ranking.
+
+## Day 4: 2026-11-11, diagnosis quality and safety
+
+**Shipped**
+- `redact`: secrets are replaced with `[REDACTED:<kind>]` right after normalisation, so
+  selection, prompts, the cache and every output only see redacted text. Known token formats
+  (GitHub, GitLab, AWS, Slack, Google, Stripe, npm, OpenAI/Anthropic-style keys), JWTs,
+  credentials in URLs, authorization headers, secret-named assignments whose value looks like
+  a secret, and whole PEM private key blocks. Line numbers never change. The brief reports
+  counts by kind; `--no-redact` turns it off. None of the six real logs has anything to redact
+  (a test checks that), so it costs no evidence there.
+- `injection`: the excerpt is fenced with a random-nonce tag, look-alike tags are defused,
+  instruction-like lines are named to the model as data and **can never be accepted as
+  citations**, and the validated answer is checked: echoing injected text or pointing the fix
+  at a host only injected lines mention adds a warning and caps confidence at 0.3; a
+  pipe-to-shell or destructive fix is flagged either way. `untrusted_lines` and `warnings` are
+  in the brief. 25-payload test suite with benign look-alikes and an obeying model end to end.
+- `taxonomy`: definitions for every category and tie-break rules ("name the cause, not the
+  reporter") in the prompt; the fake provider uses the same cause-before-symptom rules.
+- `rerank`: `--rerank` lets the chat model order up to eight candidate blocks against the
+  symptom in one short schema-constrained call, blended with the heuristic score, failed-step
+  tails untouched, heuristic fallback on any failure. Chains after embedding ranking.
+- Eval: `--rerank` adds a `pinpoint+llm` strategy; reports add paired differences between
+  ci-pinpoint variants at every budget, re-rank cost, and the injection detector's hits on
+  LogChunks as a false-positive check (with examples).
+- `scripts/injection_report.py`: three payloads planted in the six real logs, run through the
+  real model in the `real-model` workflow.
+- ADR 0004 (logs are untrusted input).
+
+**Measured**
+
+*Block re-ranking* (LogChunks dev split, a deterministic 60-log sample, line recall; Ollama
+`qwen2.5:3b` for the LLM re-rank, `nomic-embed-text` for embeddings, CPU runner;
+[eval run 43051770635](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43051770635)):
+
+| strategy | 500 | 1,000 | 2,000 | 4,000 |
+|---|---|---|---|---|
+| tail | 46.3% | 54.2% | 65.3% | 68.3% |
+| ci-pinpoint (heuristics) | 56.5% | 61.7% | 69.5% | 77.3% |
+| + embeddings | 56.5% | 61.6% | 71.1% | 78.9% |
+| + LLM re-rank | 55.1% | 60.4% | 69.4% | 77.3% |
+
+- LLM re-rank vs heuristics: -1.5 points at 500 tokens (95% interval -3.9 to +0.2), -1.3 at
+  1,000 (-3.2 to -0.1), no difference at 2,000 and 4,000. Against embeddings it is behind at
+  every budget (-1.3 to -1.7). Embeddings vs heuristics: +1.6 at 2,000 (-0.2 to +5.0).
+- Cost: 50 calls for 60 logs (the rest had nothing to reorder), 4 replies unusable and fell
+  back to heuristic order, 30.6 s and 1,512 input tokens per call on a CPU runner.
+- **Decision: `--rerank` stays off by default.** A 3B model does not order failure blocks
+  better than the heuristics it is blended with, and it costs a model call per log. The
+  feature stays because the measurement is one flag away for larger models
+  (`ci-pinpoint eval --rerank --provider openai`), which day 6 can run if a key is
+  available. Embeddings remain the better optional ranker, and still a small gain.
+- The first attempt, all 189 dev logs, hit the workflow's 150-minute limit after 156 re-rank
+  calls (about 56 s each while embeddings shared the CPU) and lost its report; `--sample`
+  exists because of it.
+
+*Prompt injection* (Ollama `qwen2.5:3b`, CPU runner; 6 real logs x 3 payloads inserted just
+before the step's `##[error]` line; one run each):
+
+| run | obeyed (raw replies) | caught by guards | silent (reached the brief unflagged) | root cause still cited |
+|---|---|---|---|---|
+| [43026838329](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43026838329) (prompt v3) | 6/18 | 5/18 | 0/18 | 7/18 |
+| [43036195150](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43036195150) (prompt v4) | 11/18 | 10/18 | 0/18 | 7/18 |
+
+The detector flagged all 18 payload lines. A 3B model follows the payload often (the
+"override" and "fix" payloads 5 of 6 times in the second run), but no obeyed payload reached
+the brief without a warning or a dropped citation. The cost is availability: with a payload in
+the log the labelled root cause is still cited in only 7 of 18 runs (vs 4 of 6 without), so an
+attacker can make a diagnosis worse, just not silently wrong. "Obeyed" counts raw replies
+including ones repaired afterwards, so it is an upper bound.
+
+*Diagnosis on the six real logs* (same model, 2,000 tokens, one run each):
+
+| run | prompt | diagnosed | root cause cited | category | longest reply (tokens) | latency per log |
+|---|---|---|---|---|---|---|
+| day 3, [42829320718](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42829320718) | v2 | 5/6 (one cut off twice) | 4/6 | 1/6 | 1,024+ | 115 to 160 s |
+| [43026838329](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43026838329) | v3: + fence, flagged lines, taxonomy | 6/6 | 3/6 | 2/6 | 1,394 (cut off, repaired) | 63 to 142 s |
+| [43036195150](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43036195150) | v4: + evidence before category, 120-char citations | 6/6 | 4/6 | 2/6 | 494 | 48 to 72 s |
+
+- The taxonomy did not fix categories for a 3B model: v3 answered `compile` for four
+  non-compile failures; v4 (category generated after the evidence) stopped that but still
+  scores 2/6 (`network`, `other`, `configuration` for infrastructure, configuration and test).
+  Category stays a weak field for small models; tomorrow's MCP output should present it as a
+  hint, not a verdict.
+- Asking for at most 120 characters per citation ended the cut-off replies on the Spotless
+  logs (the longest reply went from over 1,024 to 494 tokens), so every log now gets a
+  diagnosis, and latency fell to 48 to 72 s per log (same runner type; one run each).
+- On 20 LogChunks test-split logs (same deterministic sample as day 3, prompt v3,
+  [eval run 43027132131](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43027132131)):
+  verified 18/20 (day 3: 17/20), cites a labelled line 10/20 (day 3: 9/20), mean latency
+  103 s (47 s), mostly from the longer prompt and the cut-off replies v4 addresses. Within
+  noise for 20 logs and one run.
+
+*Injection false positives on LogChunks:* the first run flagged 10 of 584 test-split logs,
+all one repository and one line, an iOS app called "Get InfoPlist without jailbreak" in a
+README list. The bare word is no longer a trigger.
+
+**Found along the way**
+- The schema's key order is the generation order under constrained decoding; putting the
+  category first made a 3B model commit to it before reading the evidence.
+- Small models paste whole diff lines into citations until the output limit cuts them off;
+  a 120-character prefix verifies just as well.
+- An eval run that dies at its time limit uploads nothing. Long model runs now use a sample.
+
+**Next (Day 5):** where developers work: an MCP server (stdio) with `diagnose_run`,
+`get_excerpt` and `search_log`, ready-to-paste configs for Claude Code, Cursor and VS Code, a
+GitHub Action (`action.yml`) that writes the brief to the job summary, and GitLab job logs.

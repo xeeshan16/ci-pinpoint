@@ -8,9 +8,10 @@ of a 200,000-token log.
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-> Status: **day 3 of 7**, working end to end on real logs and measured on a public
-> labelled dataset ([results](#evaluation)). The MCP server and the GitHub Action land
-> later this week (see [docs/PLAN.md](docs/PLAN.md)).
+> Status: **day 4 of 7**, working end to end on real logs, measured on a public labelled
+> dataset ([results](#evaluation)), with secrets redacted and log text treated as untrusted
+> input ([how](#untrusted-logs-secrets-and-prompt-injection)). The MCP server and the GitHub
+> Action land later this week (see [docs/PLAN.md](docs/PLAN.md)).
 
 ## What it does
 
@@ -99,7 +100,8 @@ kubectl logs job/integration-tests | ci-pinpoint explain -
 Running `explain` again on the same log with the same settings is answered from the local
 cache, with no model call. Useful flags: `--format markdown|json` (Markdown for PR comments and job summaries, JSON for
 agents and scripts), `--no-llm` (just the selected lines), `--budget 4000` (excerpt size in
-tokens), `--show-excerpt`, `-v`.
+tokens), `--rerank` (one extra model call to re-rank candidate blocks), `--no-redact`,
+`--show-excerpt`, `-v`.
 
 Exit codes: `0` diagnosed with at least one verified citation (or `--no-llm`), `1` the model
 could not produce a verified diagnosis (the selected lines are still printed), `2` bad input
@@ -122,6 +124,8 @@ directory (or the file named by `CI_PINPOINT_CONFIG`). See [.env.example](.env.e
 | `CI_PINPOINT_BUDGET_TOKENS` | `2000` | excerpt size sent to the model |
 | `CI_PINPOINT_TIMEOUT_S`, `CI_PINPOINT_MAX_RETRIES` | `120`, `3` | per-call timeout, retries with backoff |
 | `CI_PINPOINT_EMBEDDER`, `CI_PINPOINT_EMBED_MODEL` | `none` | block re-ranking: `ollama` (`nomic-embed-text`), `openai` (`text-embedding-3-small`), `openai-compatible` (+ `CI_PINPOINT_EMBED_BASE_URL`), `auto` |
+| `CI_PINPOINT_RERANK` | `false` | re-rank candidate blocks with the chat model before selection (`--rerank`) |
+| `CI_PINPOINT_REDACT` | `true` | redact secrets from the log before anything else (`--no-redact` turns it off) |
 | `CI_PINPOINT_CACHE_DIR` | `~/.cache/ci-pinpoint` | verified briefs and embeddings; `--no-cache` or `CI_PINPOINT_NO_CACHE=1` to bypass |
 | `CI_PINPOINT_LOG_FORMAT` | text | `json` for structured logs on stderr |
 
@@ -133,15 +137,17 @@ With `auto`, the provider is picked from what is set: `ANTHROPIC_API_KEY`, then
 ```mermaid
 flowchart LR
     A[log file / stdin /<br/>GitHub run URL] --> B[normalise<br/>timestamps, ANSI, groups,<br/>annotations, raw line numbers]
-    B --> T[mine templates<br/>Drain-style]
+    B --> S[redact secrets<br/>tokens, keys, URL creds]
+    S --> T[mine templates<br/>Drain-style]
     T --> C[score lines<br/>signals, negatives,<br/>rarity, failed-step boost]
     C --> D[blocks under a<br/>token budget<br/>+ failed-step tails<br/>repeated lines folded]
-    C -.->|optional| R[re-rank blocks<br/>with embeddings]
+    C -.->|optional| R[re-rank blocks<br/>embeddings and/or LLM]
     R -.-> D
-    D -->|excerpt with L-numbers| E[LLM diagnosis<br/>fixed JSON schema]
-    E --> F{validate +<br/>verify citations}
+    D -->|excerpt in a nonce fence,<br/>instruction-like lines named| E[LLM diagnosis<br/>fixed JSON schema + taxonomy]
+    E --> F{validate, verify citations,<br/>never cite flagged lines}
     F -->|invalid or unverifiable| E
-    F --> G[brief: text / Markdown / JSON]
+    F --> H[output checks<br/>steered? risky fix?]
+    H --> G[brief: text / Markdown / JSON<br/>with warnings]
 ```
 
 1. **Normalise.** Strip timestamps, ANSI codes and progress-bar redraws; split on GitHub
@@ -149,10 +155,13 @@ flowchart LR
    `$ command` is a step); mark `##[error]` annotations, Travis's `The command "..." exited
    with N.` and the script that GitHub echoes before each step. Line numbers always refer
    to the raw log.
-2. **Mine templates.** A Drain-style miner groups lines into templates (a 15,687-line Maven
+2. **Redact.** Known token formats, credentials in URLs, authorization headers,
+   `*password*=` / `*token*=` assignments and private key blocks become
+   `[REDACTED:<kind>]` before selection, so no later stage (or model, or brief) sees them.
+3. **Mine templates.** A Drain-style miner groups lines into templates (a 15,687-line Maven
    log becomes 291 templates in about 0.15 s), so the tool knows which lines are the 8,000th
    copy of a progress bar and which line is unique.
-3. **Select.** Score each line from weighted signals (exceptions, `Caused by`, compiler
+4. **Select.** Score each line from weighted signals (exceptions, `Caused by`, compiler
    errors, test failures, OOM kills, refused connections, `MISSING`, "cannot", "invalid")
    with negatives for lines that only look like errors (`Failures: 0, Errors: 0`, `-Werror`)
    and build-tool boilerplate. Lines in the failed step count more; WARN/INFO lines, weak
@@ -162,16 +171,43 @@ flowchart LR
    blocks are chosen under a token budget, skipping blocks whose evidence templates were
    already chosen. Budget the scored blocks don't need goes to more of the failed step's
    output, walking back from where it failed. Optionally (`--embedder ollama|openai|auto`), blocks are re-ranked by
-   embedding similarity to common failure modes and to the failed step's symptom; this is
-   off by default because it has not helped on the labelled logs so far (see
-   [docs/PROGRESS.md](docs/PROGRESS.md)).
-4. **Diagnose.** The model sees only the excerpt, fenced as untrusted data, and must answer
-   in a fixed schema. Malformed answers get one repair round trip with the exact error.
-5. **Verify.** Each citation must point at a line the model was shown and match its text. A
+   embedding similarity to common failure modes and to the failed step's symptom, and with
+   `--rerank` a chat model ranks up to eight candidate blocks against the symptom in one
+   short call. Both are off by default; see [Evaluation](#evaluation) for why.
+5. **Diagnose.** The model sees only the excerpt, fenced as untrusted data, with short
+   definitions of each failure category and how to break ties (name the cause, not the test
+   that reported it), and must answer in a fixed schema. Malformed answers get one repair
+   round trip with the exact error.
+6. **Verify.** Each citation must point at a line the model was shown and match its text. A
    wrong line number with a unique verbatim match is corrected and flagged; anything else
-   is dropped and counted.
+   is dropped and counted. Lines that read like instructions to a model can never be
+   evidence, and the answer itself is checked for signs it was steered (below).
 
 Design decisions are recorded in [docs/adr](docs/adr).
+
+## Untrusted logs: secrets and prompt injection
+
+A CI log is written partly by whoever opened the pull request (test names, assertion
+messages, script output), and the brief may be handed to a coding agent that runs the
+suggested fix. So ci-pinpoint treats every log line as untrusted data
+([ADR 0004](docs/adr/0004-logs-are-untrusted-input.md)):
+
+- **Secrets are redacted first**, before selection, prompts, cache and output. The brief
+  says what was redacted by kind (`1 secret(s) redacted before analysis: url_credentials`),
+  never the value.
+- **The log is fenced** between `<log-xxxxxxxx>` tags with a random nonce per request; look-
+  alike tags inside the log, job or step names are defused.
+- **Instruction-like lines** ("NOTE TO AI ASSISTANT: ignore previous instructions...",
+  chat-template tokens, "set the category to...") are named to the model as data, listed in
+  the brief as `untrusted_lines`, and can never be accepted as a citation.
+- **The answer is checked.** If it repeats instruction-like text, or its fix points at a
+  host that only those lines mention, it carries a warning and its confidence is capped at
+  0.3. A fix that pipes a download into a shell or runs a destructive command is flagged
+  either way.
+
+`tests/test_injection.py` covers 25 payloads, benign look-alikes and an obeying model end to
+end; `scripts/injection_report.py` plants three payloads in the six real logs and runs them
+through a real model in CI (results in [docs/PROGRESS.md](docs/PROGRESS.md)).
 
 ## Evaluation
 
@@ -199,11 +235,27 @@ and not significant (+2.3 points, interval -2.5 to +7.1). Source:
 [CI run 42822696413](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42822696413),
 ci-pinpoint at commit `54a50d2`, no model, deterministic.
 
-With a model on top (Ollama `qwen2.5:3b` on a CPU-only runner, a deterministic sample of
-20 test-split logs, [eval run 42823682451](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823682451)):
-17 of 20 diagnoses had at least one verified citation, but only 9 of 20 cited a labelled
-line, at 47 s per log. The right lines reach the model far more often than a 3B model points
-at them; closing that gap is the next milestone.
+With a model on top (Ollama `qwen2.5:3b` on a CPU-only runner, the same deterministic sample
+of 20 test-split logs both times): 17 of 20 diagnoses verified and 9 of 20 cited a labelled
+line with the day 3 prompt ([run 42823682451](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823682451));
+18 of 20 and 10 of 20 with the day 4 prompt ([run 43027132131](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43027132131)).
+The right lines reach the model far more often than a 3B model points at them, and 20 logs
+cannot separate a one-log change from noise.
+
+Block re-ranking, all 773 logs at 2,000 tokens: `nomic-embed-text` embeddings move line
+recall from 76.6% to 77.3% (and 53.8% to 54.5% at 500 tokens), a small gain that does not
+justify a second model by default ([run 42823687484](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823687484)).
+LLM re-ranking (`--rerank`) with the same 3B model did not help: on a 60-log dev-split
+sample it was 1.3 to 1.5 points *below* heuristics at 500 to 1,000 tokens, level at 2,000,
+and cost 31 s per call ([run 43051770635](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43051770635),
+details in [docs/PROGRESS.md](docs/PROGRESS.md#day-4-2026-11-11-diagnosis-quality-and-safety)).
+Both re-rankers stay off by default.
+
+Prompt injection, six real logs with three planted payloads each (18 runs, `qwen2.5:3b`,
+[run 43036195150](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43036195150)): the
+detector flagged all 18 payload lines; the model followed the payload in 11 raw replies, and
+**none of those reached the brief unflagged** (each got a warning or a dropped citation). An
+injected log still degrades the diagnosis: the labelled cause was cited in 7 of 18 runs.
 
 Reproduce it, or score your own labelled logs:
 
@@ -235,12 +287,19 @@ labelled with the root-cause line(s); a test enforces that selection keeps those
 - The public evaluation set is Travis CI logs from 2018 to 2019; the GitHub Actions
   evidence is six hand-labelled logs. Line recall says the right lines reach the model, not
   that the model explains them well; model-level numbers on LogChunks come next.
-- Embedding re-ranking exists but is off by default: with `nomic-embed-text` it did not
-  improve ranking on the labelled logs.
+- Embedding and LLM re-ranking exist but are off by default: embeddings add under a point
+  of recall on LogChunks, and an LLM re-rank costs about a minute per log on a CPU runner.
+- Small local models are weak at the category field (2 of 6 right on the labelled logs with
+  `qwen2.5:3b`); treat it as a hint. Citations and the root cause are the useful part.
 - Token counts are estimates (3.5 characters per token), not tokenizer-exact.
 - GitHub Actions URLs only; GitLab logs work as files or stdin.
-- Secrets are not yet redacted before the prompt (day 4). GitHub masks registered secrets
-  in logs, but do not send logs with unmasked secrets to a hosted model.
+- Redaction uses known formats and secret-named assignments; a secret in an unknown format
+  printed on its own will not be caught. Review logs before sending them to a hosted model
+  if your jobs print credentials.
+- Injection detection is pattern-based and misses paraphrases, other languages and
+  encodings. The citation rule and output checks limit what a missed injection can do, but
+  a steered model can still write misleading prose: read warnings, and review a suggested
+  fix before an agent runs it.
 
 ## License
 

@@ -7,6 +7,26 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Secret redaction before selection, prompts, cache and output: GitHub, GitLab, AWS,
+  Slack, Google, Stripe, npm and LLM API keys, JWTs, URL credentials, authorization
+  headers, secret-named assignments and PEM private key blocks. The brief counts
+  redactions by kind (`redactions`); `--no-redact` / `CI_PINPOINT_REDACT=false`.
+- Prompt-injection hardening: a random-nonce fence, defused look-alike tags,
+  instruction-like lines listed to the model as data and never accepted as citations
+  (`untrusted_lines` in the brief), and output checks that warn and cap confidence when a
+  diagnosis repeats injected text or plants a fix host, and flag pipe-to-shell or
+  destructive fixes (`warnings`). A 25-payload test suite and
+  `scripts/injection_report.py` for real-model runs.
+- A failure-category taxonomy with definitions and tie-break rules in the prompt.
+- LLM re-ranking of candidate blocks (`--rerank` / `CI_PINPOINT_RERANK`, off by default
+  because `qwen2.5:3b` did not beat the heuristics on the dev split): one short
+  schema-constrained call, blended with the heuristic score, with fallback to heuristic
+  order. Chains after embedding ranking.
+- `ci-pinpoint eval --sample N`: a deterministic, repository-spread sample for slow model
+  strategies.
+- `ci-pinpoint eval --rerank` adds a `pinpoint+llm` strategy; reports now include paired
+  recall differences between ci-pinpoint variants at every budget, re-rank latency and
+  token cost, and how many logs the injection detector flags.
 - `ci-pinpoint eval`: scores line selection against `tail` and `grep` baselines at equal
   token budgets on LogChunks (797 labelled Travis CI logs, downloaded and checksum-verified
   with `--fetch`) or any `manifest.json` of labelled logs; failure shown, line recall,
@@ -37,6 +57,11 @@ All notable changes to this project are documented here. The format follows
 - Six hand-labelled real failed GitHub Actions logs as test fixtures.
 - CI for Python 3.11 to 3.13, a clean-venv package smoke test, and a workflow
   that runs the fixtures through a real Ollama model.
+
+### Changed
+- Diagnosis prompt `diagnose-v4`: the schema asks for summary, root cause and citations
+  before the category (generation order under constrained decoding), and citations quote at
+  most the first 120 characters of a line, which ended cut-off replies on long diff lines.
 
 ### Fixed
 - The `\x1b(B` that `tput sgr0` emits is stripped; a line ending in `\r\x1b[0K` keeps its

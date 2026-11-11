@@ -61,3 +61,7 @@ project completed.
   tested locally on synthetic LogChunks-shaped data and the six fixtures.
 - Day 3 also added the budget fill to selection, because the first eval run showed the
   scored blocks under-spending the budget. Day 4's measurements use the dev split.
+- Day 4 measured the LLM re-rank on a deterministic 60-log sample of the dev split rather
+  than all 189 logs: a full run needs about 56 s per re-rank call on a CPU runner and did not
+  fit the workflow's time limit. The diagnosis-prompt changes were checked on the six real
+  logs and on the same 20 test-split logs as day 3 (before/after, not tuned on them).
