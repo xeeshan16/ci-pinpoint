@@ -9,6 +9,7 @@ from ci_pinpoint.config import Settings
 from ci_pinpoint.diagnose import DiagnosisFailedError, diagnose
 from ci_pinpoint.diagnose.prompt import PROMPT_VERSION
 from ci_pinpoint.heuristics import build_excerpt
+from ci_pinpoint.injection import flag_lines
 from ci_pinpoint.models import (
     Brief,
     ElisionOut,
@@ -115,6 +116,9 @@ def explain(
         diagnosis=None,
         ranked_with=ranker.model if ranker and ranker.error is None else None,
         redactions=redactions,
+        untrusted_lines=sorted(
+            flag_lines(line for block in excerpt.blocks for line in block.lines)
+        ),
     )
     log.info(
         "excerpt selected",

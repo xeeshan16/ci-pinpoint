@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import time
 
-from ci_pinpoint.diagnose.citations import verify_citations
+from ci_pinpoint.diagnose.citations import UNTRUSTED_REASON, verify_citations
 from ci_pinpoint.diagnose.parse import DiagnosisParseError, parse_diagnosis
 from ci_pinpoint.diagnose.prompt import DIAGNOSIS_SCHEMA, build_messages, repair_message
+from ci_pinpoint.injection import INJECTED_CONFIDENCE_CAP, check_output, flag_lines
 from ci_pinpoint.models import DiagnosisResult, Excerpt, NormalizedLog, TokenUsage
 from ci_pinpoint.providers.base import ChatModel, Message
 
@@ -29,8 +30,18 @@ def diagnose(
     max_output_tokens: int = 1024,
     repair_attempts: int = 1,
 ) -> DiagnosisResult:
+    flagged = flag_lines(line for block in excerpt.blocks for line in block.lines)
+    if flagged:
+        log.warning(
+            "instruction-like text in the log",
+            extra={"source": source, "lines": sorted(flagged)[:20]},
+        )
     messages: list[Message] = build_messages(
-        excerpt, source=source, job_name=job_name, failed_steps=failed_steps or []
+        excerpt,
+        source=source,
+        job_name=job_name,
+        failed_steps=failed_steps or [],
+        flagged=flagged,
     )
     usage = TokenUsage()
     started = time.perf_counter()
@@ -59,13 +70,25 @@ def diagnose(
                 extra={"attempt": attempt, "error": last_error, "reply": completion.text[:600]},
             )
         else:
-            verified, rejected = verify_citations(diagnosis.citations, lines, shown)
+            verified, rejected = verify_citations(diagnosis.citations, lines, shown, flagged)
             if verified or attempt > repair_attempts:
                 if rejected:
                     log.info(
                         "citations rejected",
                         extra={"rejected": len(rejected), "verified": len(verified)},
                     )
+                check = check_output(diagnosis, lines, flagged, shown)
+                if check.injection_suspected and (diagnosis.confidence or 0) > (
+                    INJECTED_CONFIDENCE_CAP
+                ):
+                    diagnosis = diagnosis.model_copy(update={"confidence": INJECTED_CONFIDENCE_CAP})
+                warnings = list(check.warnings)
+                if any(r.reason == UNTRUSTED_REASON for r in rejected):
+                    warnings.append(
+                        "the model cited instruction-like log lines; those citations were dropped"
+                    )
+                if warnings:
+                    log.warning("diagnosis warnings", extra={"warnings": warnings})
                 return DiagnosisResult(
                     diagnosis=diagnosis,
                     citations=verified,
@@ -75,6 +98,7 @@ def diagnose(
                     attempts=attempt,
                     usage=usage,
                     latency_s=round(time.perf_counter() - started, 3),
+                    warnings=warnings,
                 )
             last_error = "none of the citations match the log: " + "; ".join(
                 f"L{r.line} ({r.reason})" for r in rejected[:3]

@@ -54,6 +54,16 @@ def _redactions(brief: Brief) -> str | None:
     return f"{total} secret(s) redacted before analysis: {kinds}"
 
 
+def _untrusted(brief: Brief) -> str:
+    listed = ", ".join(f"L{no}" for no in brief.untrusted_lines[:10])
+    return f"instruction-like text in the log ({listed}) was treated as data, not evidence"
+
+
+def _notes(brief: Brief, shape: str) -> list[str]:
+    notes = [_redactions(brief), _untrusted(brief) if brief.untrusted_lines else None]
+    return [shape.format(note) for note in notes if note]
+
+
 def _reduction(brief: Brief) -> str:
     s = brief.stats
     text = (
@@ -99,6 +109,8 @@ def render_text(brief: Brief, *, show_excerpt: bool = False) -> str:
         if d.rejected_citations:
             out.append(f"    ({len(d.rejected_citations)} unverifiable citation(s) dropped)")
         out += ["", "  Suggested fix", *[f"    {line}" for line in diag.suggested_fix.splitlines()]]
+        if d.warnings:
+            out += ["", "  ⚠ Warnings", *[f"    - {w}" for w in d.warnings]]
     elif brief.error:
         out += [
             "",
@@ -108,9 +120,7 @@ def render_text(brief: Brief, *, show_excerpt: bool = False) -> str:
         show_excerpt = True
     else:
         show_excerpt = True
-    out += ["", f"  excerpt: {_reduction(brief)}"]
-    if (redacted := _redactions(brief)) is not None:
-        out.append(f"  {redacted}")
+    out += ["", f"  excerpt: {_reduction(brief)}", *_notes(brief, "  {}")]
     if show_excerpt:
         out += ["", *[f"  {line}" for line in _excerpt_lines(brief)]]
     return "\n".join(out)
@@ -142,11 +152,11 @@ def render_markdown(brief: Brief, *, show_excerpt: bool = True) -> str:
         else:
             out.append("- none of the model's citations could be verified")
         out += ["", "**Suggested fix.** " + diag.suggested_fix]
+        if d.warnings:
+            out += ["", *[f"> ⚠ {w}" for w in d.warnings]]
     elif brief.error:
         out += ["", f"> diagnosis failed: {brief.error}"]
-    out += ["", f"_Excerpt: {_reduction(brief)}._"]
-    if (redacted := _redactions(brief)) is not None:
-        out.append(f"_{redacted}._")
+    out += ["", f"_Excerpt: {_reduction(brief)}._", *_notes(brief, "_{}._")]
     if show_excerpt and brief.excerpt:
         out += [
             "",

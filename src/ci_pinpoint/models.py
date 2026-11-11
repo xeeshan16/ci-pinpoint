@@ -179,6 +179,11 @@ class DiagnosisResult(BaseModel):
     attempts: int
     usage: TokenUsage
     latency_s: float
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Output checks that failed: signs the log steered the model, or a "
+        "risky suggested fix. Read these before acting on the diagnosis.",
+    )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -234,6 +239,11 @@ class Brief(BaseModel):
         default=None, description="Embedding model that re-ranked the blocks, if any."
     )
     cached: bool = False
+    untrusted_lines: list[int] = Field(
+        default_factory=list,
+        description="Excerpt lines that read like instructions to an AI model. They were "
+        "shown to the model as data only and can never be cited as evidence.",
+    )
     redactions: dict[str, int] = Field(
         default_factory=dict,
         description="Secrets replaced with [REDACTED:<kind>] before anything was selected "

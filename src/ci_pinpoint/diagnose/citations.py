@@ -5,13 +5,14 @@ A citation is:
 * ``verified`` when its line number exists and its text matches that line,
 * ``relocated`` when the number is wrong but the text is found verbatim on
   exactly one line the model was shown (we fix the number),
-* rejected otherwise (invented text, or a line the model never saw).
+* rejected otherwise (invented text, a line the model never saw, or a line that
+  reads like an instruction to the model: see :mod:`ci_pinpoint.injection`).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Set
 from difflib import SequenceMatcher
 
 from ci_pinpoint.models import (
@@ -27,6 +28,7 @@ _WS = re.compile(r"\s+")
 _PREFIX = re.compile(r"^\s*L\d+:\s?")
 MIN_SUBSTRING_CHARS = 12
 MIN_RATIO = 0.85
+UNTRUSTED_REASON = "line contains instruction-like text from the log and cannot be evidence"
 
 
 def _norm(text: str) -> str:
@@ -53,12 +55,24 @@ def verify_citations(
     citations: Iterable[Citation],
     lines: dict[int, LogLine],
     shown: set[int],
+    untrusted: Set[int] = frozenset(),
 ) -> tuple[list[VerifiedCitation], list[RejectedCitation]]:
+    """``untrusted`` lines (instruction-like text in the log) are never accepted."""
     verified: list[VerifiedCitation] = []
     rejected: list[RejectedCitation] = []
     seen: set[int] = set()
+    citable = shown - untrusted
     for citation in citations:
         actual = lines.get(citation.line)
+        if citation.line in untrusted and actual is not None and citation.line in shown:
+            rejected.append(
+                RejectedCitation(
+                    line=citation.line,
+                    text=citation.text[:300],
+                    reason=UNTRUSTED_REASON,
+                )
+            )
+            continue
         if (
             actual is not None
             and citation.line in shown
@@ -74,7 +88,7 @@ def verify_citations(
             continue
         matches = [
             no
-            for no in sorted(shown)
+            for no in sorted(citable)
             if no in lines and text_matches(citation.text, lines[no].text)
         ]
         if len(matches) == 1:
