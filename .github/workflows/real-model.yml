@@ -29,7 +29,7 @@ jobs:
   ollama:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       MODEL: ${{ inputs.model || 'qwen2.5:3b' }}
       EMBED_MODEL: nomic-embed-text
@@ -61,6 +61,16 @@ jobs:
         run: |
           uv run python scripts/fixture_report.py --provider ollama --model "$MODEL" --out reports/real-model
           cat reports/real-model/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnose with LLM re-ranking of candidate blocks (smoke test)
+        run: |
+          uv run python scripts/fixture_report.py --provider ollama --model "$MODEL" --rerank \
+            --out reports/real-model-rerank
+          head -n 12 reports/real-model-rerank/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: prompt injection on the real CI logs
+        run: |
+          uv run python scripts/injection_report.py --provider ollama --model "$MODEL" \
+            --out reports/injection
+          cat reports/injection/report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

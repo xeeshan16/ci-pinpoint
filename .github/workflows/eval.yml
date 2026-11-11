@@ -16,11 +16,15 @@ on:
       embed_model:
         description: Ollama embedding model
         default: nomic-embed-text
+      rerank:
+        description: add the pinpoint+llm strategy (blocks re-ranked by the Ollama chat model)
+        type: boolean
+        default: false
       diagnose:
         description: number of logs to diagnose with the model (0 = none)
         default: "0"
       model:
-        description: Ollama chat model for diagnosis
+        description: Ollama chat model for diagnosis and re-ranking
         default: qwen2.5:3b
 
 permissions:
@@ -29,7 +33,7 @@ permissions:
 jobs:
   logchunks:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     env:
       CI_PINPOINT_TIMEOUT_S: "900"
       CI_PINPOINT_MAX_RETRIES: "1"
@@ -44,7 +48,7 @@ jobs:
           path: .data/logchunks
           key: logchunks-3632351-v1
       - name: install and start Ollama
-        if: inputs.embedder == 'ollama' || inputs.diagnose != '0'
+        if: inputs.embedder == 'ollama' || inputs.diagnose != '0' || inputs.rerank
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
           if ! curl -sf http://localhost:11434/api/tags > /dev/null; then
@@ -52,16 +56,20 @@ jobs:
           fi
           for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags > /dev/null && break; sleep 1; done
           if [ "${{ inputs.embedder }}" = "ollama" ]; then ollama pull "${{ inputs.embed_model }}"; fi
-          if [ "${{ inputs.diagnose }}" != "0" ]; then ollama pull "${{ inputs.model }}"; fi
+          if [ "${{ inputs.diagnose }}" != "0" ] || [ "${{ inputs.rerank }}" = "true" ]; then
+            ollama pull "${{ inputs.model }}"
+          fi
       - name: evaluate
         run: |
           args=(--fetch --data .data/logchunks --split "${{ inputs.split }}" --out reports/eval -v)
           if [ "${{ inputs.embedder }}" = "ollama" ]; then
             args+=(--embedder ollama --embed-model "${{ inputs.embed_model }}")
           fi
-          if [ "${{ inputs.diagnose }}" != "0" ]; then
-            args+=(--diagnose "${{ inputs.diagnose }}" --provider ollama --model "${{ inputs.model }}")
+          if [ "${{ inputs.diagnose }}" != "0" ] || [ "${{ inputs.rerank }}" = "true" ]; then
+            args+=(--provider ollama --model "${{ inputs.model }}")
           fi
+          if [ "${{ inputs.diagnose }}" != "0" ]; then args+=(--diagnose "${{ inputs.diagnose }}"); fi
+          if [ "${{ inputs.rerank }}" = "true" ]; then args+=(--rerank --jobs 1); fi
           uv run ci-pinpoint eval "${args[@]}"
           cat reports/eval/eval.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

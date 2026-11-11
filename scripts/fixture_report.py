@@ -27,6 +27,7 @@ from ci_pinpoint.pipeline import explain
 from ci_pinpoint.providers import build_chat, build_embedder
 from ci_pinpoint.ranking import EmbeddingRanker
 from ci_pinpoint.render import render_markdown
+from ci_pinpoint.rerank import ChainRanker, LLMRanker, NamedRanker
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "logs"
@@ -38,6 +39,9 @@ def main() -> int:
     parser.add_argument("--model")
     parser.add_argument("--budget", type=int)
     parser.add_argument("--embedder", help="none (default), auto, ollama, openai, fake")
+    parser.add_argument(
+        "--rerank", action="store_true", help="re-rank candidate blocks with the chat model"
+    )
     parser.add_argument("--out", type=Path, default=Path("reports/fixtures"))
     parser.add_argument(
         "--require-cited",
@@ -53,11 +57,17 @@ def main() -> int:
             "model": args.model,
             "budget_tokens": args.budget,
             "embedder": args.embedder,
+            "rerank": True if args.rerank else None,
         }
     )
     chat = build_chat(settings, os.environ)
     embedder = build_embedder(settings, os.environ)
-    ranker = EmbeddingRanker(embedder) if embedder is not None else None
+    rankers: list[NamedRanker] = [EmbeddingRanker(embedder)] if embedder is not None else []
+    if settings.rerank:
+        rankers.append(LLMRanker(chat))
+    ranker: NamedRanker | None = (
+        None if not rankers else rankers[0] if len(rankers) == 1 else ChainRanker(rankers)
+    )
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
     args.out.mkdir(parents=True, exist_ok=True)
 
