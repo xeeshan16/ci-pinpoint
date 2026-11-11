@@ -74,6 +74,7 @@ class CaseResult:
     label_lines: int
     requirements: int
     instruction_like_lines: int = 0
+    instruction_like_examples: list[tuple[int, str]] = field(default_factory=list)
     scores: dict[str, dict[int, Score]] = field(default_factory=dict)
     diagnosis: DiagnosisScore | None = None
 
@@ -113,8 +114,11 @@ def evaluate_case(case: Case, strategies: Sequence[Strategy], budgets: Sequence[
         raw_tokens=estimate_lines_tokens(line.text for line in log_.lines),
         label_lines=len(case.label_lines),
         requirements=len(case.requirements),
-        instruction_like_lines=len(flag_lines(log_.lines)),
     )
+    flagged = sorted(flag_lines(log_.lines))
+    result.instruction_like_lines = len(flagged)
+    by_no = {line.no: line.text for line in log_.lines}
+    result.instruction_like_examples = [(no, by_no[no][:200]) for no in flagged[:3]]
     for strategy in strategies:
         selections = strategy.select(log_, budgets)
         result.scores[strategy.name] = {b: score(case, log_, selections[b]) for b in budgets}

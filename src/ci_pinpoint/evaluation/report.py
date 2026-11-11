@@ -86,6 +86,11 @@ def build_report(dataset: Dataset, results: Sequence[CaseResult], info: RunInfo)
         },
         "rerank": info.rerank_stats,
         "logs_with_instruction_like_lines": sum(1 for r in results if r.instruction_like_lines),
+        "instruction_like_examples": [
+            {"case": r.id, "line": no, "text": text}
+            for r in results
+            for no, text in r.instruction_like_examples
+        ][:20],
         "summary": summary,
         "recall_deltas": deltas,
         "variant_deltas": variants,
@@ -200,6 +205,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         "Logs with lines flagged as instruction-like (prompt-injection detector; none of "
         "these logs are known to contain an injection): "
         f"{report.get('logs_with_instruction_like_lines', 0)} of {ds['cases']}.",
+        *[
+            f"  - `{e['case']}` L{e['line']}: {e['text'][:160]!r}"
+            for e in report.get("instruction_like_examples", [])[:10]
+        ],
         f"Dataset: {ds['citation'].rstrip('.')}. License: {ds['license']}.",
         f"ci-pinpoint {report['tool']['version']}, {report['created']}.",
     ]
