@@ -52,7 +52,7 @@ _INSTRUCTION_PATTERNS: tuple[str, ...] = (
     r"\bdo\s+not\s+(?:mention|report|reveal|cite|tell)\b[^\n]{0,40}"
     r"\b(?:user|developer|error|failure|this)\b",
     r"\bact\s+as\s+(?:an?\s+)?(?:ai|assistant|system|admin|developer mode)\b",
-    r"\bjailbreak\b|\bDAN mode\b|\bdeveloper mode enabled\b",
+    r"\bDAN mode\b|\bdeveloper mode enabled\b",
     r"<\|(?:im_start|im_end|system|user|assistant|endoftext|eot_id|start_header_id)\|>",
     r"\[/?INST\]|<</?SYS>>",
     r"^\s*#{2,}\s*(?:system|instruction|assistant)\b",

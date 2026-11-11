@@ -66,6 +66,8 @@ BENIGN = [
     "test_reply_with_json PASSED",
     "Assistant module loaded",
     "##[group]Operating System",
+    # Seen in LogChunks (dkhamsing/open-source-ios-apps): an app name in a README list.
+    "822 Get InfoPlist without jailbreak",
 ]
 
 
