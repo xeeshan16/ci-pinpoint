@@ -5,9 +5,11 @@ Supported URLs (gitlab.com or a self-managed host)::
     https://gitlab.com/<namespace>/<project>/-/jobs/<job_id>[/raw]
     https://gitlab.com/<namespace>/<project>/-/pipelines/<pipeline_id>
 
-Public projects with public pipelines need no token. For private projects set
-``GITLAB_TOKEN`` (a personal, project or group access token with ``read_api``);
-inside a GitLab job, ``CI_JOB_TOKEN`` is used if no other token is set. The API
+Downloading a job log needs a token, even for a public project: gitlab.com lists a
+public pipeline's jobs anonymously but answers 401 for the job and its trace (checked
+against the live API in November 2026). Set ``GITLAB_TOKEN`` (a personal, project or
+group access token with ``read_api``); inside a GitLab job, ``CI_JOB_TOKEN`` is used if
+no other token is set. The API
 base defaults to ``https://<host>/api/v4``; set ``GITLAB_API_URL`` (or GitLab's own
 ``CI_API_V4_URL``) when the instance lives under a path prefix.
 
@@ -130,8 +132,8 @@ class GitLabClient:
             raise GitLabError(f"GitLab request failed: {exc}") from exc
         if response.status_code in (401, 403, 404) and not self._has_token:
             raise GitLabError(
-                f"GitLab returned HTTP {response.status_code} for {path}. The project or its "
-                "pipelines may be private: set GITLAB_TOKEN (read_api scope)."
+                f"GitLab returned HTTP {response.status_code} for {path}. Reading job logs "
+                "needs a token, even for public projects: set GITLAB_TOKEN (read_api scope)."
             )
         if response.status_code == 404:
             raise GitLabError(f"not found: {path} (check the URL, or the token's project access)")
