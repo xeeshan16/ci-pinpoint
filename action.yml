@@ -1,0 +1,94 @@
+name: CI Pinpoint
+description: >-
+  Find the log lines that broke a CI run, explain why with line citations checked
+  against the log, and write the brief to the job summary.
+author: Zeeshan Imdad
+branding:
+  icon: crosshair
+  color: red
+
+inputs:
+  source:
+    description: >-
+      What to diagnose: a GitHub Actions run or job URL, a GitLab job or pipeline URL, or a
+      log file path. Defaults to the failed jobs of the current workflow run (run this in a
+      job that needs the jobs you want explained, with `if: failure()`).
+    required: false
+    default: ""
+  github-token:
+    description: "Token used to download job logs. Needs `actions: read`."
+    required: false
+    default: ${{ github.token }}
+  provider:
+    description: >-
+      Model provider: openai, anthropic, azure, openai-compatible, ollama. Empty picks one
+      from the environment (ANTHROPIC_API_KEY, AZURE_OPENAI_ENDPOINT, OPENAI_API_KEY,
+      CI_PINPOINT_BASE_URL); with none set, only the selected log lines are reported.
+    required: false
+    default: ""
+  model:
+    description: Model name (or Azure deployment). Empty uses the provider's default.
+    required: false
+    default: ""
+  base-url:
+    description: Base URL of an OpenAI-compatible server (vLLM, LM Studio, a gateway).
+    required: false
+    default: ""
+  budget:
+    description: Token budget for the selected log lines.
+    required: false
+    default: "2000"
+  no-llm:
+    description: Only select log lines; never call a model.
+    required: false
+    default: "false"
+  annotate:
+    description: Add a notice annotation per failed job to the run page.
+    required: false
+    default: "true"
+  python:
+    description: Python interpreter to install ci-pinpoint with (3.11 or newer).
+    required: false
+    default: python3
+
+outputs:
+  brief-json:
+    description: Path to a JSON file with one brief per failed job.
+    value: ${{ steps.explain.outputs.brief-json }}
+  summary:
+    description: The first job's one-line diagnosis, or empty when there is none.
+    value: ${{ steps.explain.outputs.summary }}
+  diagnosed:
+    description: "'true' when every failed job got a diagnosis with a verified citation."
+    value: ${{ steps.explain.outputs.diagnosed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install ci-pinpoint
+      shell: bash
+      env:
+        PYTHON: ${{ inputs.python }}
+      run: |
+        set -euo pipefail
+        "$PYTHON" -c 'import sys; assert sys.version_info >= (3, 11), "ci-pinpoint needs Python 3.11+ (set the python input or use actions/setup-python)"'
+        venv="$RUNNER_TEMP/ci-pinpoint-venv"
+        "$PYTHON" -m venv "$venv"
+        "$venv/bin/python" -m pip install --quiet --disable-pip-version-check "$GITHUB_ACTION_PATH"
+        echo "CI_PINPOINT_BIN=$venv/bin/ci-pinpoint" >> "$GITHUB_ENV"
+
+    - name: Explain the failure
+      id: explain
+      shell: bash
+      env:
+        INPUT_SOURCE: ${{ inputs.source }}
+        DEFAULT_SOURCE: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_BASE_URL: ${{ inputs.base-url }}
+        INPUT_BUDGET: ${{ inputs.budget }}
+        INPUT_NO_LLM: ${{ inputs.no-llm }}
+        INPUT_ANNOTATE: ${{ inputs.annotate }}
+        CI_PINPOINT_CACHE_DIR: ${{ runner.temp }}/ci-pinpoint-cache
+      run: bash "$GITHUB_ACTION_PATH/scripts/action-explain.sh"

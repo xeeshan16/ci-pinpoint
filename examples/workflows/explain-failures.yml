@@ -1,0 +1,37 @@
+# Add a job like `explain` to an existing workflow: when any job it needs fails, it
+# writes a ci-pinpoint brief to the run's summary page and adds an annotation.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test
+
+  explain:
+    needs: [test]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # download the failed jobs' logs
+    steps:
+      - uses: xeeshan16/ci-pinpoint@main
+        id: pinpoint
+        env:
+          # Optional. Without a model the summary shows the selected log lines only.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # Outputs contain model text derived from the log: pass them through env, never
+      # inline them into a script with ${{ }}.
+      - if: steps.pinpoint.outputs.diagnosed == 'true'
+        env:
+          SUMMARY: ${{ steps.pinpoint.outputs.summary }}
+        run: |
+          echo "ci-pinpoint says: $SUMMARY"

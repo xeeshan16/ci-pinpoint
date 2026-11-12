@@ -1,0 +1,26 @@
+# Explain failures of another workflow without touching it, including runs from forks
+# (pull_request runs from forks get no secrets; workflow_run runs in the base repository).
+# The log is untrusted text from that run: this workflow only reads it and writes a
+# summary, it never checks out or runs the pull request's code.
+name: explain-ci-failures
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  explain:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: xeeshan16/ci-pinpoint@main
+        with:
+          source: ${{ github.event.workflow_run.html_url }}
+          provider: anthropic
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

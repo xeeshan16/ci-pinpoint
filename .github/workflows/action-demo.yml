@@ -1,0 +1,43 @@
+# End-to-end check of the action on its default path: a job fails for real, and a
+# later job in the same run explains it from the run's own logs. Manual only, because
+# the failing job is the point.
+name: action-demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  broken-build:
+    name: unit tests (fails on purpose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx run pytest -q examples/demo/test_pricing.py
+
+  explain:
+    needs: [broken-build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        id: pinpoint
+      - name: check the action found and read the failed job
+        env:
+          BRIEFS: ${{ steps.pinpoint.outputs.brief-json }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          briefs = json.load(open(os.environ["BRIEFS"]))
+          assert [b["job_name"] for b in briefs] == ["unit tests (fails on purpose)"], briefs
+          lines = [t for blk in briefs[0]["excerpt"] for _, t in blk["lines"]]
+          assert any("assert 50.0 == 45.0" in t for t in lines), lines
+          print("ok:", briefs[0]["stats"])
+          PY

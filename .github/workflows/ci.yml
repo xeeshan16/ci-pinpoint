@@ -105,6 +105,48 @@ jobs:
           name: eval-reports
           path: reports/
 
+  action:
+    name: GitHub Action (this checkout)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint]
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: a log file, no model configured
+        id: file
+        uses: ./
+        with:
+          source: tests/fixtures/logs/smoke-test-missing-metrics.log.gz
+      - name: a real failed run of another public repository (fake provider)
+        id: run
+        uses: ./
+        with:
+          source: https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40330806643
+          provider: fake
+      - name: check the outputs and the job summary
+        env:
+          FILE_DIAGNOSED: ${{ steps.file.outputs.diagnosed }}
+          FILE_JSON: ${{ steps.file.outputs.brief-json }}
+          RUN_DIAGNOSED: ${{ steps.run.outputs.diagnosed }}
+          RUN_SUMMARY: ${{ steps.run.outputs.summary }}
+          RUN_JSON: ${{ steps.run.outputs.brief-json }}
+        run: |
+          set -x
+          test "$FILE_DIAGNOSED" = false
+          test "$RUN_DIAGNOSED" = true
+          case "$RUN_SUMMARY" in "[fake provider]"*) ;; *) exit 1 ;; esac
+          grep -q "gen_ai_request_model" "$FILE_JSON"
+          python3 - <<'PY'
+          import json, os
+          briefs = json.load(open(os.environ["RUN_JSON"]))
+          assert [b["job_name"] for b in briefs] == ["docker image, compose demo smoke test"]
+          assert briefs[0]["failed_steps"] == ["Smoke test"]
+          PY
+          grep -q "docker image, compose demo smoke test" "$GITHUB_STEP_SUMMARY"
+
   package:
     name: build, install, smoke test
     runs-on: ubuntu-latest
