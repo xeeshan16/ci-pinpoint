@@ -1,0 +1,20 @@
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "github-token",
+      "description": "GitHub token that can read Actions logs (gh auth token)",
+      "password": true
+    }
+  ],
+  "servers": {
+    "ci-pinpoint": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/xeeshan16/ci-pinpoint", "ci-pinpoint", "mcp"],
+      "env": {
+        "GITHUB_TOKEN": "${input:github-token}"
+      }
+    }
+  }
+}

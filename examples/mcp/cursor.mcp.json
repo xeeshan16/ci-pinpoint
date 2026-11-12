@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ci-pinpoint": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/xeeshan16/ci-pinpoint", "ci-pinpoint", "mcp"],
+      "env": {
+        "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ci-pinpoint": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/xeeshan16/ci-pinpoint", "ci-pinpoint", "mcp"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+        "OLLAMA_HOST": "${OLLAMA_HOST:-http://localhost:11434}"
+      }
+    }
+  }
+}
