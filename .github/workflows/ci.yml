@@ -46,6 +46,8 @@ jobs:
         env:
           # The live test downloads a real failed job log from a public repository.
           CI_PINPOINT_LIVE_GITHUB: ${{ matrix.python == '3.12' && '1' || '' }}
+          # And a recent failed job of a public gitlab.com project, without a token.
+          CI_PINPOINT_LIVE_GITLAB: ${{ matrix.python == '3.12' && '1' || '' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
           uv run pytest --cov --cov-report=term --cov-report=xml:reports/coverage.xml

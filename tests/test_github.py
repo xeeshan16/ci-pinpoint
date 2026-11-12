@@ -127,7 +127,7 @@ def test_transport_error() -> None:
 
 def test_unsupported_url_and_missing_file(tmp_path) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(SourceError, match="unsupported URL"):
-        load_sources("https://gitlab.com/x/y/-/jobs/1", env={})
+        load_sources("https://example.com/x/y/builds/1", env={})
     with pytest.raises(SourceError, match="no such file"):
         load_sources(str(tmp_path / "nope.log"), env={})
 

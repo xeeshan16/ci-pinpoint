@@ -1,4 +1,4 @@
-"""Load logs from a file (plain or .gz), stdin, or a GitHub Actions URL."""
+"""Load logs from a file (plain or .gz), stdin, a GitHub Actions URL or a GitLab job URL."""
 
 from __future__ import annotations
 
@@ -15,6 +15,13 @@ from ci_pinpoint.ingest.github import (
     fetch_failed_logs,
     github_token,
     parse_run_url,
+)
+from ci_pinpoint.ingest.gitlab import (
+    GitLabClient,
+    fetch_gitlab_logs,
+    gitlab_api_url,
+    gitlab_auth_headers,
+    parse_gitlab_url,
 )
 from ci_pinpoint.models import RawLog
 
@@ -47,23 +54,35 @@ def load_sources(
     transport: httpx.BaseTransport | None = None,
     stdin: BinaryIO | None = None,
 ) -> list[RawLog]:
-    """Resolve SOURCE into one or more raw logs (one per failed job for a run URL)."""
+    """Resolve SOURCE into one or more raw logs (one per failed job for a run or pipeline)."""
     if source == "-":
         return [read_stream(stdin or sys.stdin.buffer)]
     if source.startswith(("http://", "https://")):
         ref = parse_run_url(source)
-        if ref is None:
-            raise SourceError(
-                "unsupported URL; expected https://github.com/<owner>/<repo>/actions/runs/<id>"
-                "[/job/<job_id>]"
+        if ref is not None:
+            client = GitHubActionsClient(
+                token=github_token(env), api_url=api_url, timeout_s=timeout_s, transport=transport
             )
-        client = GitHubActionsClient(
-            token=github_token(env), api_url=api_url, timeout_s=timeout_s, transport=transport
+            try:
+                return fetch_failed_logs(client, ref)
+            finally:
+                client.close()
+        gl_ref = parse_gitlab_url(source)
+        if gl_ref is not None:
+            gl_client = GitLabClient(
+                api_url=gitlab_api_url(gl_ref, env),
+                headers=gitlab_auth_headers(env),
+                timeout_s=timeout_s,
+                transport=transport,
+            )
+            try:
+                return fetch_gitlab_logs(gl_client, gl_ref)
+            finally:
+                gl_client.close()
+        raise SourceError(
+            "unsupported URL; expected https://github.com/<owner>/<repo>/actions/runs/<id>"
+            "[/job/<job_id>] or https://<gitlab-host>/<project>/-/jobs/<id> (or /-/pipelines/<id>)"
         )
-        try:
-            return fetch_failed_logs(client, ref)
-        finally:
-            client.close()
     path = Path(source)
     if not path.is_file():
         raise SourceError(f"{source}: no such file")

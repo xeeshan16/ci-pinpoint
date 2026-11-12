@@ -133,6 +133,7 @@ STACK_FRAME = re.compile(
 GENERIC_EXIT = re.compile(
     r"^Process completed with exit code \d+\.?$"  # GitHub Actions
     r'|^The command ".*" (?:failed and )?exited with \d+'  # Travis CI
+    r"|^ERROR: Job failed: exit (?:code|status) \d+\s*$"  # GitLab runner
 )
 LOW_VALUE_SECTION = re.compile(
     r"^(?:Set up job|Runner Image|Operating System|Runner Image Provisioner|"

@@ -6,7 +6,9 @@ Handles the formats that show up in practice:
   ``##[group]``/``##[endgroup]`` and ``::group::``/``::endgroup::`` markers and
   ``##[error]`` / ``::error ...::`` annotations.
 * GitLab job traces: ``section_start:<ts>:<name>`` / ``section_end:<ts>:<name>``
-  markers, usually wrapped in ANSI escape codes.
+  markers, usually wrapped in ANSI escape codes. ``$ command`` echoes inside a
+  section are commands, and the runner's closing ``ERROR: Job failed: ...`` line
+  marks the script section that ran last (it is printed after that section ends).
 * Travis CI job logs: ``travis_fold:start:<name>`` / ``travis_fold:end:<name>``
   and ``travis_time:...`` markers hidden behind ``\r\x1b[0K``. Every top-level
   ``$ command`` starts a step, and ``The command "..." exited with N.`` marks the
@@ -39,6 +41,8 @@ GITLAB_SECTION_END_RE = re.compile(r"section_end:\d+:[\w.\-]+\r?")
 TRAVIS_MARKER_RE = re.compile(r"travis_(fold|time):(start|end):([\w.\-]+)[^\r\n]*?(?=\r|$)")
 TRAVIS_COMMAND_RE = re.compile(r"^\$ (\S.*)$")
 TRAVIS_EXIT_RE = re.compile(r'^The command "(.*)" (?:failed and )?exited with ([1-9]\d*)')
+GITLAB_JOB_FAILED_RE = re.compile(r"^ERROR: Job failed\b")
+GITLAB_COMMAND_RE = re.compile(r"^\$ \S")
 TOP_LEVEL_TITLE = "(top level)"
 
 PREAMBLE_TITLE = "(log start)"
@@ -84,8 +88,8 @@ class _Builder:
         self.errors.append(False)
         self.current = len(self.titles) - 1
 
-    def mark_error(self) -> None:
-        self.errors[self.current] = True
+    def mark_error(self, index: int | None = None) -> None:
+        self.errors[self.current if index is None else index] = True
 
     def add(self, no: int, text: str, kind: LineKind = LineKind.TEXT) -> None:
         self.lines.append(LogLine(no=no, text=text, section=self.current, kind=kind))
@@ -136,14 +140,29 @@ def _normalize_default(text: str) -> NormalizedLog:
     """GitHub Actions, GitLab and plain logs."""
     out = _Builder()
     in_run_header = False
+    gitlab = False
+    script_section: int | None = None  # the GitLab script section opened last
     for no, raw in enumerate(split_lines(text), start=1):
         # GitLab markers live inside ANSI sequences, so look before stripping colours.
         gl_start = GITLAB_SECTION_START_RE.search(raw)
         if gl_start:
+            gitlab = True
             out.open_section(gl_start.group(1), no)
+            if gl_start.group(1) in ("step_script", "build_script") or (
+                script_section is None and "script" in gl_start.group(1)
+            ):
+                script_section = out.current
             out.add(no, clean_line(gl_start.group(2)), LineKind.GROUP)
             continue
         cleaned = clean_line(GITLAB_SECTION_END_RE.sub("", raw))
+        if gitlab:
+            if GITLAB_JOB_FAILED_RE.match(cleaned):
+                out.mark_error(script_section)
+                out.add(no, cleaned, LineKind.ERROR_ANNOTATION)
+                continue
+            if GITLAB_COMMAND_RE.match(cleaned) and out.current != 0:
+                out.add(no, cleaned, LineKind.COMMAND)
+                continue
 
         group = GROUP_RE.match(cleaned)
         if group:

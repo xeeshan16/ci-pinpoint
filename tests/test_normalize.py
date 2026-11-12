@@ -164,7 +164,10 @@ def test_travis_failure_inside_a_fold_marks_that_fold() -> None:
     assert [s.title for s in log.sections if s.has_error] == ["install.1"]
 
 
-def test_dollar_lines_are_plain_text_outside_travis_logs() -> None:
+def test_dollar_lines_in_gitlab_sections_are_commands_not_steps() -> None:
+    # Unlike Travis, a GitLab "$ ..." echo does not open a step; it is the command
+    # the runner is about to run, scored like GitHub's "Run ..." echo.
     log = normalize("section_start:1:step_script\r\x1b[0K\n$ make test\nboom\n")
     assert [s.title for s in log.sections] == ["(log start)", "step_script"]
-    assert log.lines[1].kind is LineKind.TEXT
+    assert log.lines[1].kind is LineKind.COMMAND
+    assert log.lines[2].kind is LineKind.TEXT

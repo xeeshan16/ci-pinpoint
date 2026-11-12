@@ -20,7 +20,7 @@ from ci_pinpoint import __version__
 from ci_pinpoint.cache import BriefCache, CachedEmbedder, EmbeddingStore, default_cache_dir
 from ci_pinpoint.config import EMBEDDERS, PROVIDERS, ConfigError, load_settings
 from ci_pinpoint.evaluation import command as eval_command
-from ci_pinpoint.ingest import GitHubError, SourceError, load_sources
+from ci_pinpoint.ingest import GitHubError, GitLabError, SourceError, load_sources
 from ci_pinpoint.logging_setup import configure
 from ci_pinpoint.pipeline import explain
 from ci_pinpoint.providers import ChatModel, build_chat, build_embedder
@@ -47,7 +47,8 @@ def _parser() -> argparse.ArgumentParser:
         "explain",
         help="diagnose a failed CI log",
         description="Diagnose a failed CI job. SOURCE is a log file (plain or .gz), '-' for "
-        "stdin, or a GitHub Actions run/job URL (needs GITHUB_TOKEN).",
+        "stdin, a GitHub Actions run/job URL (needs GITHUB_TOKEN), or a GitLab job or "
+        "pipeline URL.",
     )
     ex.add_argument("source", help="log file, '-', or https://github.com/<o>/<r>/actions/runs/<id>")
     ex.add_argument("--provider", choices=PROVIDERS, help="model provider (default: auto)")
@@ -145,7 +146,7 @@ def run(
             timeout_s=settings.timeout_s,
             stdin=stdin,
         )
-    except (ConfigError, SourceError, GitHubError) as exc:
+    except (ConfigError, SourceError, GitHubError, GitLabError) as exc:
         if store is not None:
             store.close()
         print(f"ci-pinpoint: {exc}", file=err)
