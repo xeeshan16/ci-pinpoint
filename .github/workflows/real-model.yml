@@ -52,6 +52,16 @@ jobs:
           for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags > /dev/null && break; sleep 1; done
           ollama --version
       - run: ollama pull "$MODEL" && ollama pull "$EMBED_MODEL"
+      - name: an agent session over MCP (official SDK client, real model)
+        run: |
+          uv run python scripts/mcp_session.py --provider ollama --model "$MODEL" --out reports/mcp
+          cat reports/mcp/session.md >> "$GITHUB_STEP_SUMMARY"
+      - name: the GitHub Action with the same local model
+        uses: ./
+        with:
+          source: tests/fixtures/logs/postgres-connection-refused.log.gz
+          provider: ollama
+          model: ${{ env.MODEL }}
       - name: block ranking with real embeddings
         run: |
           uv run python scripts/selection_report.py --embedder ollama --embed-model "$EMBED_MODEL" \
