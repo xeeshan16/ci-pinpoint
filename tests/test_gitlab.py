@@ -124,7 +124,42 @@ def test_auth_and_api_url() -> None:
     ref = parse_gitlab_url(JOB)
     assert ref is not None
     assert gitlab_api_url(ref, {}) == "https://gitlab.com/api/v4"
-    assert gitlab_api_url(ref, {"CI_API_V4_URL": "https://h/gl/api/v4/"}) == ("https://h/gl/api/v4")
+    hosted = parse_gitlab_url("https://h/team/svc/-/jobs/1")
+    assert hosted is not None
+    assert (
+        gitlab_api_url(hosted, {"CI_API_V4_URL": "https://h/gl/api/v4/"}) == "https://h/gl/api/v4"
+    )
+    # A configured API base is only used for its own host.
+    assert gitlab_api_url(ref, {"CI_API_V4_URL": "https://h/gl/api/v4"}) == (
+        "https://gitlab.com/api/v4"
+    )
+
+
+def test_token_only_goes_to_trusted_hosts() -> None:
+    env = {"GITLAB_TOKEN": "glpat"}
+    assert gitlab_auth_headers(env, "gitlab.com") == {"PRIVATE-TOKEN": "glpat"}
+    assert gitlab_auth_headers(env, "evil.example") == {}
+    assert gitlab_auth_headers({**env, "GITLAB_HOST": "git.corp"}, "git.corp") == {
+        "PRIVATE-TOKEN": "glpat"
+    }
+    assert gitlab_auth_headers({**env, "GITLAB_API_URL": "https://git.corp/api/v4"}, "git.corp")
+    assert gitlab_auth_headers({**env, "CI_SERVER_HOST": "git.corp"}, "GIT.CORP:443")
+
+
+def test_crafted_self_managed_url_gets_no_token() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=JOB_JSON)
+
+    load_sources(
+        "https://collector.example/acme/x/-/jobs/1",
+        env={"GITLAB_TOKEN": "glpat-secret"},
+        transport=httpx.MockTransport(handler),
+    )
+    assert seen
+    assert all("PRIVATE-TOKEN" not in r.headers for r in seen)
 
 
 def test_job_url_fetches_trace_without_token() -> None:

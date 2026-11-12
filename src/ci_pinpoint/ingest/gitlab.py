@@ -10,6 +10,11 @@ Public projects with public pipelines need no token. For private projects set
 inside a GitLab job, ``CI_JOB_TOKEN`` is used if no other token is set. The API
 base defaults to ``https://<host>/api/v4``; set ``GITLAB_API_URL`` (or GitLab's own
 ``CI_API_V4_URL``) when the instance lives under a path prefix.
+
+A token is only ever sent to gitlab.com or to the host named by ``GITLAB_API_URL``,
+``CI_API_V4_URL``, ``CI_SERVER_HOST`` or ``GITLAB_HOST``. The URL to fetch can come
+from an agent that has read untrusted text, and a crafted self-managed URL must not
+be able to collect the token.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -62,7 +67,27 @@ def parse_gitlab_url(url: str) -> GitLabRef | None:
     return GitLabRef(host=match["host"], project=match["project"], pipeline_id=ident)
 
 
-def gitlab_auth_headers(env: Mapping[str, str]) -> dict[str, str]:
+def _explicit_api(env: Mapping[str, str]) -> str | None:
+    return env.get("GITLAB_API_URL") or env.get("CI_API_V4_URL") or None
+
+
+def trusted_hosts(env: Mapping[str, str]) -> frozenset[str]:
+    """Hosts that may receive a GitLab token."""
+    hosts = {"gitlab.com"}
+    explicit = _explicit_api(env)
+    if explicit:
+        hosts.add((urlsplit(explicit).hostname or "").lower())
+    for key in ("CI_SERVER_HOST", "GITLAB_HOST"):
+        if env.get(key):
+            hosts.add(env[key].strip().lower())
+    hosts.discard("")
+    return frozenset(hosts)
+
+
+def gitlab_auth_headers(env: Mapping[str, str], host: str | None = None) -> dict[str, str]:
+    """Auth headers for ``host``; none if the host is not trusted with the token."""
+    if host is not None and host.lower().split(":")[0] not in trusted_hosts(env):
+        return {}
     token = env.get("GITLAB_TOKEN") or env.get("GL_TOKEN")
     if token:
         return {"PRIVATE-TOKEN": token}
@@ -73,8 +98,11 @@ def gitlab_auth_headers(env: Mapping[str, str]) -> dict[str, str]:
 
 
 def gitlab_api_url(ref: GitLabRef, env: Mapping[str, str]) -> str:
-    explicit = env.get("GITLAB_API_URL") or env.get("CI_API_V4_URL")
-    return (explicit or f"https://{ref.host}/api/v4").rstrip("/")
+    """The configured API base when it serves the URL's host, else ``https://<host>/api/v4``."""
+    explicit = _explicit_api(env)
+    if explicit and (urlsplit(explicit).netloc or "").lower() == ref.host.lower():
+        return explicit.rstrip("/")
+    return f"https://{ref.host}/api/v4"
 
 
 class GitLabClient:

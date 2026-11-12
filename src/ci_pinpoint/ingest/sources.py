@@ -71,7 +71,7 @@ def load_sources(
         if gl_ref is not None:
             gl_client = GitLabClient(
                 api_url=gitlab_api_url(gl_ref, env),
-                headers=gitlab_auth_headers(env),
+                headers=gitlab_auth_headers(env, gl_ref.host),
                 timeout_s=timeout_s,
                 transport=transport,
             )
