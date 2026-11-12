@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import BinaryIO, TextIO
 
 from ci_pinpoint import __version__
@@ -21,8 +23,9 @@ from ci_pinpoint.evaluation import command as eval_command
 from ci_pinpoint.ingest import GitHubError, GitLabError, SourceError, load_sources
 from ci_pinpoint.logging_setup import configure
 from ci_pinpoint.mcp_server import serve_stdio
+from ci_pinpoint.models import Brief
 from ci_pinpoint.pipeline import explain
-from ci_pinpoint.render import FORMATS, render
+from ci_pinpoint.render import FORMATS, github_annotation, render
 from ci_pinpoint.runtime import Runtime, build_runtime
 
 log = logging.getLogger(__name__)
@@ -74,6 +77,17 @@ def _parser() -> argparse.ArgumentParser:
         help="don't redact secrets (tokens, keys, passwords) from the log before using it",
     )
     ex.add_argument("--show-excerpt", action="store_true", help="print the selected lines too")
+    ex.add_argument(
+        "--summary-file",
+        metavar="PATH",
+        help='also append the Markdown brief to PATH, e.g. "$GITHUB_STEP_SUMMARY"',
+    )
+    ex.add_argument("--json-out", metavar="PATH", help="also write the briefs as JSON to PATH")
+    ex.add_argument(
+        "--github-annotations",
+        action="store_true",
+        help="also print a ::notice workflow command per job (shows on the run page)",
+    )
     ex.add_argument("-v", "--verbose", action="count", default=0, help="log to stderr (-vv: debug)")
     eval_command.add_parser(sub)
 
@@ -188,6 +202,11 @@ def run(
     finally:
         runtime.close()
     print(render(briefs, args.format, show_excerpt=args.show_excerpt), file=out)
+    try:
+        _extra_outputs(args, briefs, out)
+    except OSError as exc:
+        print(f"ci-pinpoint: could not write output: {exc}", file=err)
+        return EXIT_USAGE
     if runtime.chat is None:
         return EXIT_OK
     undiagnosed = [b for b in briefs if b.diagnosis is None or not b.diagnosis.verified]
@@ -195,6 +214,20 @@ def run(
         reason = brief.error or "no citation could be verified against the log"
         print(f"ci-pinpoint: {brief.job_name or brief.source}: {reason}", file=err)
     return EXIT_UNDIAGNOSED if undiagnosed else EXIT_OK
+
+
+def _extra_outputs(args: argparse.Namespace, briefs: list[Brief], out: TextIO) -> None:
+    if args.summary_file:
+        with open(args.summary_file, "a", encoding="utf-8") as fh:
+            fh.write(render(briefs, "markdown") + "\n\n")
+    if args.json_out:
+        Path(args.json_out).write_text(
+            json.dumps([b.model_dump(mode="json") for b in briefs], indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if args.github_annotations:
+        for brief in briefs:
+            print(github_annotation(brief), file=out)
 
 
 def main() -> None:  # pragma: no cover - thin wrapper

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
+from ci_pinpoint.heuristics import score_text
 from ci_pinpoint.models import Brief, CitationStatus
 
 FORMATS = ("text", "markdown", "json")
@@ -173,6 +174,39 @@ def render_markdown(brief: Brief, *, show_excerpt: bool = True, category_hint: b
             "</details>",
         ]
     return "\n".join(out)
+
+
+def _escape_command(text: str, *, prop: bool = False) -> str:
+    """Escape a value for a GitHub workflow command (``%``, CR, LF; ``:`` and ``,`` in
+    properties), so log text cannot end the command or start another one."""
+    text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if prop:
+        text = text.replace(":", "%3A").replace(",", "%2C")
+    return text
+
+
+def github_annotation(brief: Brief) -> str:
+    """A ``::notice`` workflow command with the diagnosis (or the excerpt's best line)."""
+    title = f"ci-pinpoint: {_title(brief)}"
+    d = brief.diagnosis
+    if d is not None and d.verified:
+        diag = d.diagnosis
+        cited = ", ".join(f"L{c.line}" for c in d.citations)
+        message = f"{diag.summary}\nEvidence: {cited}\nFix: {diag.suggested_fix}"
+        if d.provider == "fake":
+            message = "[fake provider, not a real diagnosis] " + message
+    elif brief.excerpt:
+        # The strongest line of the highest-scoring block (blocks are scored in context,
+        # single lines only on their own text).
+        best = max(brief.excerpt, key=lambda block: block.score)
+        no, text = max(best.lines, key=lambda line: (score_text(line[1])[0], -line[0]))
+        message = f"No diagnosis. Strongest error line in the excerpt: L{no}: {_clip(text, 300)}"
+    else:
+        message = "No failure lines found in the log."
+    return (
+        f"::notice title={_escape_command(_clip(title, 120), prop=True)}::"
+        f"{_escape_command(_clip(message, 1500))}"
+    )
 
 
 def render(briefs: Sequence[Brief], fmt: str, *, show_excerpt: bool = False) -> str:

@@ -175,3 +175,76 @@ def test_unwritable_cache_dir_does_not_break_explain(tmp_path: Path) -> None:
     code, out, _ = _run(["explain", SMOKE, "--provider", "fake", "--embedder", "fake"], env=env)
     assert code == EXIT_OK
     assert "ranked with fake-hash-256" in out
+
+
+def test_summary_json_and_annotations_for_ci(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("# earlier step\n")
+    out_json = tmp_path / "brief.json"
+    code, out, _ = _run(
+        [
+            "explain",
+            SMOKE,
+            "--provider",
+            "fake",
+            "--no-cache",
+            "--summary-file",
+            str(summary),
+            "--json-out",
+            str(out_json),
+            "--github-annotations",
+        ]
+    )
+    assert code == EXIT_OK
+    written = summary.read_text()
+    assert written.startswith("# earlier step\n### ✖ ")  # appended, not replaced
+    assert "fake provider, not a real diagnosis" in written
+    briefs = json.loads(out_json.read_text())
+    assert isinstance(briefs, list)
+    assert briefs[0]["diagnosis"]["verified"] is True
+    notice = next(line for line in out.splitlines() if line.startswith("::notice "))
+    assert notice.startswith("::notice title=ci-pinpoint%3A ")
+    assert "[fake provider, not a real diagnosis]" in notice
+    assert "%0AEvidence: L" in notice
+
+
+def test_annotation_without_a_model_points_at_the_lines(tmp_path: Path) -> None:
+    code, out, _ = _run(["explain", SMOKE, "--no-llm", "--github-annotations"])
+    assert code == EXIT_OK
+    notice = next(line for line in out.splitlines() if line.startswith("::notice "))
+    assert "Strongest error line in the excerpt: L1757: MISSING   " in notice
+
+
+def test_annotations_cannot_be_broken_by_log_text() -> None:
+    from ci_pinpoint.models import Brief, ExcerptBlockOut, LogStats
+    from ci_pinpoint.render import github_annotation
+
+    brief = Brief(
+        source="x",
+        job_name="build, test: 100%",
+        job_url=None,
+        stats=LogStats(
+            raw_lines=1, raw_tokens=10, excerpt_tokens=5, sections=1, failed_sections=[]
+        ),
+        excerpt=[
+            ExcerptBlockOut(
+                start=1, end=1, score=1.0, signals=[], lines=[(1, "boom\r\n::error::pwned 50%")]
+            )
+        ],
+        diagnosis=None,
+    )
+    notice = github_annotation(brief)
+    # One physical line: a workflow command is only parsed at the start of a line,
+    # so the escaped log text cannot start a second command.
+    assert "\n" not in notice
+    assert "\r" not in notice
+    assert "title=ci-pinpoint%3A build%2C test%3A 100%25::" in notice
+    assert "%0D%0A" in notice
+
+
+def test_unwritable_summary_file_is_a_usage_error(tmp_path: Path) -> None:
+    code, _, err = _run(
+        ["explain", SMOKE, "--no-llm", "--summary-file", str(tmp_path / "missing" / "s.md")]
+    )
+    assert code == EXIT_USAGE
+    assert "could not write output" in err
