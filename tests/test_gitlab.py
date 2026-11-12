@@ -273,19 +273,37 @@ def test_excerpt_of_a_gitlab_trace_contains_the_cause() -> None:
     not os.environ.get("CI_PINPOINT_LIVE_GITLAB"), reason="set CI_PINPOINT_LIVE_GITLAB=1"
 )
 def test_live_public_gitlab_job() -> None:
-    """Real API, no token: a recent failed job of a public gitlab.com project."""
-    project = os.environ.get("CI_PINPOINT_LIVE_GITLAB_PROJECT", "gitlab-org/gitlab-runner")
+    """Real API, no token: a recent failed job of a public gitlab.com project.
+
+    Discovery goes pipeline -> failed job, recording what gitlab.com answers
+    anonymously at each step; ci-pinpoint must then fetch and read the job."""
+    project = os.environ.get("CI_PINPOINT_LIVE_GITLAB_PROJECT", "gitlab-org/gitlab")
     api = "https://gitlab.com/api/v4/projects/" + project.replace("/", "%2F")
+    seen: dict[str, int] = {}
     with httpx.Client(timeout=30, headers={"User-Agent": "ci-pinpoint-tests"}) as client:
-        listing = client.get(f"{api}/jobs", params={"scope[]": "failed", "per_page": 5})
-    if listing.status_code in (401, 403):
-        pytest.skip(f"gitlab.com does not list {project} jobs anonymously ({listing.status_code})")
-    listing.raise_for_status()
-    jobs = listing.json()
-    assert jobs, f"no failed jobs listed for {project}"
-    logs = load_sources(jobs[0]["web_url"], env={})
+        pipes = client.get(f"{api}/pipelines", params={"status": "failed", "per_page": 5})
+        seen["pipelines"] = pipes.status_code
+        job_url = None
+        if pipes.status_code == 200:
+            for pipe in pipes.json():
+                jobs = client.get(
+                    f"{api}/pipelines/{pipe['id']}/jobs", params={"scope[]": "failed"}
+                )
+                seen["pipeline_jobs"] = jobs.status_code
+                if jobs.status_code != 200:
+                    break
+                if jobs.json():
+                    job_url = jobs.json()[0]["web_url"]
+                    break
+        if job_url:
+            job_id = job_url.rstrip("/").rsplit("/", 1)[-1]
+            seen["job"] = client.get(f"{api}/jobs/{job_id}").status_code
+            seen["trace"] = client.get(f"{api}/jobs/{job_id}/trace").status_code
+            seen["web_raw"] = client.get(f"{job_url}/raw").status_code
+    if job_url is None or seen.get("job") != 200 or seen.get("trace") != 200:
+        pytest.skip(f"gitlab.com anonymous access for {project}: {seen} ({job_url})")
+    logs = load_sources(job_url, env={})
     assert len(logs) == 1
     brief = explain(logs[0], Settings(), None)
     assert brief.stats.raw_lines > 10
     assert brief.excerpt
-    print(f"\n{jobs[0]['web_url']}: {brief.stats.raw_lines} lines, failed {brief.failed_steps}")
