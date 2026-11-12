@@ -25,7 +25,8 @@ def _md_code(text: str) -> str:
     return f"{fence} {text} {fence}" if fence == "``" else f"`{text}`"
 
 
-def _excerpt_lines(brief: Brief) -> list[str]:
+def excerpt_lines(brief: Brief) -> list[str]:
+    """The selected lines as ``L<no> text``, with gaps and folded runs marked."""
     out: list[str] = []
     previous: int | None = None
     for block in brief.excerpt:
@@ -122,11 +123,13 @@ def render_text(brief: Brief, *, show_excerpt: bool = False) -> str:
         show_excerpt = True
     out += ["", f"  excerpt: {_reduction(brief)}", *_notes(brief, "  {}")]
     if show_excerpt:
-        out += ["", *[f"  {line}" for line in _excerpt_lines(brief)]]
+        out += ["", *[f"  {line}" for line in excerpt_lines(brief)]]
     return "\n".join(out)
 
 
-def render_markdown(brief: Brief, *, show_excerpt: bool = True) -> str:
+def render_markdown(brief: Brief, *, show_excerpt: bool = True, category_hint: bool = False) -> str:
+    """Markdown for job summaries and agents. ``category_hint`` labels the category
+    as the model's guess: small models get it wrong far more often than the cause."""
     title = _title(brief)
     out = [f"### ✖ {title}"]
     if brief.job_url:
@@ -139,7 +142,8 @@ def render_markdown(brief: Brief, *, show_excerpt: bool = True) -> str:
             "",
             f"**{diag.summary}**",
             "",
-            f"`{diag.category.value}` · confidence {_confidence(diag.confidence)} · "
+            f"`{diag.category.value}`{' (category hint)' if category_hint else ''} · "
+            f"confidence {_confidence(diag.confidence)} · "
             f"`{d.provider}/{d.model}`{fake}",
             "",
             "**Root cause.** " + diag.root_cause,
@@ -163,7 +167,7 @@ def render_markdown(brief: Brief, *, show_excerpt: bool = True) -> str:
             "<details><summary>Selected log lines</summary>",
             "",
             "```text",
-            *_excerpt_lines(brief),
+            *excerpt_lines(brief),
             "```",
             "",
             "</details>",

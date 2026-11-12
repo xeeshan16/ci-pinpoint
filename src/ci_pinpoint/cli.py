@@ -8,25 +8,22 @@ or configuration. ``eval`` returns 1 when ``--fail-under`` is not met.
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import os
-import sqlite3
 import sys
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import BinaryIO, TextIO
 
 from ci_pinpoint import __version__
-from ci_pinpoint.cache import BriefCache, CachedEmbedder, EmbeddingStore, default_cache_dir
 from ci_pinpoint.config import EMBEDDERS, PROVIDERS, ConfigError, load_settings
 from ci_pinpoint.evaluation import command as eval_command
 from ci_pinpoint.ingest import GitHubError, GitLabError, SourceError, load_sources
 from ci_pinpoint.logging_setup import configure
+from ci_pinpoint.mcp_server import serve_stdio
 from ci_pinpoint.pipeline import explain
-from ci_pinpoint.providers import ChatModel, build_chat, build_embedder
-from ci_pinpoint.ranking import EmbeddingRanker
 from ci_pinpoint.render import FORMATS, render
-from ci_pinpoint.rerank import ChainRanker, LLMRanker, NamedRanker
+from ci_pinpoint.runtime import Runtime, build_runtime
 
 log = logging.getLogger(__name__)
 
@@ -79,16 +76,60 @@ def _parser() -> argparse.ArgumentParser:
     ex.add_argument("--show-excerpt", action="store_true", help="print the selected lines too")
     ex.add_argument("-v", "--verbose", action="count", default=0, help="log to stderr (-vv: debug)")
     eval_command.add_parser(sub)
+
+    mcp = sub.add_parser(
+        "mcp",
+        help="run as an MCP server over stdio, for coding agents",
+        description="Serve diagnose_run, get_excerpt, search_log and get_log_lines to an MCP "
+        "client (Claude Code, Cursor, VS Code) over stdio. Log files are readable only under "
+        "the working directory, or the directories in CI_PINPOINT_MCP_ROOTS.",
+    )
+    mcp.add_argument("--provider", choices=PROVIDERS, help="model provider (default: auto)")
+    mcp.add_argument("--model", help="model name or Azure deployment")
+    mcp.add_argument("--base-url", help="OpenAI-compatible base URL")
+    mcp.add_argument("--budget", type=int, dest="budget_tokens", help="default token budget")
+    mcp.add_argument("--embedder", choices=EMBEDDERS, help="embedder for block ranking")
+    mcp.add_argument("--no-llm", action="store_true", help="serve excerpts and search only")
+    mcp.add_argument("--no-cache", action="store_true", help="don't read or write the cache")
+    mcp.add_argument("-v", "--verbose", action="count", default=0, help="log to stderr")
     return parser
 
 
-def _open_store(root: Path) -> EmbeddingStore | None:
-    """The embedding cache, or None if the cache directory is not writable."""
+def _serve_mcp(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    stdin: BinaryIO | None,
+    stdout: TextIO | None,
+    err: TextIO,
+) -> int:
     try:
-        return EmbeddingStore(root / "embeddings.sqlite3")
-    except (OSError, sqlite3.Error) as exc:
-        log.warning("embedding cache disabled", extra={"path": str(root), "error": str(exc)})
-        return None
+        settings = load_settings(
+            env=env,
+            overrides={
+                "provider": args.provider,
+                "model": args.model,
+                "base_url": args.base_url,
+                "budget_tokens": args.budget_tokens,
+                "embedder": args.embedder,
+            },
+        )
+    except ConfigError as exc:
+        print(f"ci-pinpoint: {exc}", file=err)
+        return EXIT_USAGE
+    model_error: str | None = None
+    try:
+        runtime = build_runtime(settings, env, use_llm=not args.no_llm, use_cache=not args.no_cache)
+    except ConfigError as exc:
+        # Still useful without a model: excerpts and search need none.
+        model_error = str(exc)
+        log.warning("serving without a model", extra={"error": model_error})
+        runtime = build_runtime(settings, env, use_llm=False, use_cache=not args.no_cache)
+    reader = io.TextIOWrapper(stdin, encoding="utf-8", newline="\n") if stdin else None
+    try:
+        serve_stdio(runtime, env, stdin=reader, stdout=stdout, model_error=model_error)
+    finally:
+        runtime.close()
+    return EXIT_OK
 
 
 def run(
@@ -106,8 +147,10 @@ def run(
     configure(args.verbose, env)
     if args.command == "eval":
         return eval_command.run_eval(args, env, out, err)
+    if args.command == "mcp":
+        return _serve_mcp(args, env, stdin, stdout, err)
 
-    store: EmbeddingStore | None = None
+    runtime: Runtime | None = None
     try:
         settings = load_settings(
             env=env,
@@ -123,22 +166,7 @@ def run(
                 "rerank": args.rerank,
             },
         )
-        chat: ChatModel | None = None if args.no_llm else build_chat(settings, env)
-        use_cache = not args.no_cache and not env.get("CI_PINPOINT_NO_CACHE")
-        cache_root = Path(settings.cache_dir) if settings.cache_dir else default_cache_dir(env)
-        embedder = build_embedder(settings, env)
-        store = _open_store(cache_root) if embedder is not None and use_cache else None
-        if embedder is not None and store is not None:
-            embedder = CachedEmbedder(embedder, store)
-        rankers: list[NamedRanker] = []
-        if embedder is not None:
-            rankers.append(EmbeddingRanker(embedder))
-        if settings.rerank and chat is not None:
-            rankers.append(LLMRanker(chat))
-        ranker: NamedRanker | None = (
-            None if not rankers else rankers[0] if len(rankers) == 1 else ChainRanker(rankers)
-        )
-        cache = BriefCache(cache_root) if use_cache else None
+        runtime = build_runtime(settings, env, use_llm=not args.no_llm, use_cache=not args.no_cache)
         raws = load_sources(
             args.source,
             env=env,
@@ -147,18 +175,20 @@ def run(
             stdin=stdin,
         )
     except (ConfigError, SourceError, GitHubError, GitLabError) as exc:
-        if store is not None:
-            store.close()
+        if runtime is not None:
+            runtime.close()
         print(f"ci-pinpoint: {exc}", file=err)
         return EXIT_USAGE
 
     try:
-        briefs = [explain(raw, settings, chat, ranker=ranker, cache=cache) for raw in raws]
+        briefs = [
+            explain(raw, settings, runtime.chat, ranker=runtime.ranker, cache=runtime.cache)
+            for raw in raws
+        ]
     finally:
-        if store is not None:
-            store.close()
+        runtime.close()
     print(render(briefs, args.format, show_excerpt=args.show_excerpt), file=out)
-    if chat is None:
+    if runtime.chat is None:
         return EXIT_OK
     undiagnosed = [b for b in briefs if b.diagnosis is None or not b.diagnosis.verified]
     for brief in undiagnosed:
