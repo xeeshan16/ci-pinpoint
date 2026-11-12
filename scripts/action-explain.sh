@@ -8,7 +8,8 @@ source_ref="${INPUT_SOURCE:-}"
 if [[ -z "$source_ref" ]]; then
   source_ref="$DEFAULT_SOURCE"
 fi
-json_out="$RUNNER_TEMP/ci-pinpoint-briefs.json"
+# One file per invocation: a job may use the action more than once.
+json_out="$RUNNER_TEMP/ci-pinpoint-briefs-${GITHUB_ACTION:-run}-$$.json"
 
 args=(explain "$source_ref" --format text --show-excerpt --json-out "$json_out")
 [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && args+=(--summary-file "$GITHUB_STEP_SUMMARY")

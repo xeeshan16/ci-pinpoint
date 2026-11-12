@@ -138,14 +138,18 @@ jobs:
           test "$FILE_DIAGNOSED" = false
           test "$RUN_DIAGNOSED" = true
           case "$RUN_SUMMARY" in "[fake provider]"*) ;; *) exit 1 ;; esac
-          grep -q "gen_ai_request_model" "$FILE_JSON"
+          test "$FILE_JSON" != "$RUN_JSON"
           python3 - <<'PY'
           import json, os
+          file_briefs = json.load(open(os.environ["FILE_JSON"]))
+          shown = [t for block in file_briefs[0]["excerpt"] for _, t in block["lines"]]
+          assert any("MISSING              gen_ai_request_model" in t for t in shown)
+          assert file_briefs[0]["diagnosis"] is None
           briefs = json.load(open(os.environ["RUN_JSON"]))
           assert [b["job_name"] for b in briefs] == ["docker image, compose demo smoke test"]
           assert briefs[0]["failed_steps"] == ["Smoke test"]
+          assert briefs[0]["diagnosis"]["provider"] == "fake"
           PY
-          grep -q "docker image, compose demo smoke test" "$GITHUB_STEP_SUMMARY"
 
   package:
     name: build, install, smoke test
