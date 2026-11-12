@@ -363,3 +363,75 @@ README list. The bare word is no longer a trigger.
 **Next (Day 5):** where developers work: an MCP server (stdio) with `diagnose_run`,
 `get_excerpt` and `search_log`, ready-to-paste configs for Claude Code, Cursor and VS Code, a
 GitHub Action (`action.yml`) that writes the brief to the job summary, and GitLab job logs.
+
+## Day 5: 2026-11-12, where developers work
+
+**Shipped**
+- `ci-pinpoint mcp`, an MCP server over stdio
+  ([docs/mcp.md](mcp.md), [ADR 0005](adr/0005-mcp-server-without-the-sdk.md)). Four
+  tools: `diagnose_run` (the brief, with `structuredContent` and the category labelled a
+  hint), `get_excerpt` (no model), `search_log` (regex or literal, with context) and
+  `get_log_lines` (at most 300 lines). Sources are GitHub run/job URLs, GitLab job/pipeline
+  URLs or log files; a run with several failed jobs takes a `job` filter. A small
+  dependency-free protocol layer: handshake versions 2024-11-05 to 2025-11-25, `server/discover`
+  answered "method not found" so newer clients fall back, tool calls on worker threads (ping
+  stays responsive), progress notifications, cancellation, batches.
+- Safety for agents reading untrusted logs: redacted output from every tool, an untrusted-
+  data header, instruction-like lines marked inline, files only under the working directory
+  or `CI_PINPOINT_MCP_ROOTS` (resolved, so `..` and symlinks cannot escape), stdin refused,
+  regex patterns capped at 300 characters with a 5 s search deadline, results capped at
+  60,000 characters, an 8-source in-memory log cache.
+- Ready-to-paste configs for Claude Code, Cursor and VS Code in `examples/mcp`.
+- GitLab: job and pipeline URLs (gitlab.com and self-managed), `GITLAB_TOKEN` or
+  `CI_JOB_TOKEN`, failed jobs without allowed failures, capped at 50. The runner's
+  `ERROR: Job failed` line marks the script section as the failed step and `$ command` echoes
+  score as commands. Tokens go only to gitlab.com or the configured host, so a crafted URL
+  from an agent cannot collect them.
+- A GitHub Action (`action.yml`, composite, installs itself from its own checkout): brief in
+  the job summary, a `::notice` annotation per failed job, outputs `brief-json`, `summary`,
+  `diagnosed`. With no model configured it reports the selected lines instead of retrying a
+  local Ollama the runner does not have. Example workflows for an in-workflow job and for
+  `workflow_run`.
+- CLI outputs for any CI: `--summary-file`, `--json-out`, `--github-annotations` (escaped so
+  log text cannot end the workflow command).
+- Model and cache construction moved to `runtime.py`, shared by the CLI and the server.
+
+**Verified**
+- MCP interop: the official MCP Python SDK client (2.3, which probes `server/discover` first)
+  starts `ci-pinpoint mcp` as a subprocess and checks the handshake, tool list, progress,
+  structured output against the declared schema, and tool errors, in the test suite.
+- Real model through MCP ([real-model run 43226199981](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43226199981),
+  Ollama `qwen2.5:3b`, CPU runner, smoke-test fixture): handshake negotiated 2025-11-25;
+  `diagnose_run` took 82.8 s and cited L1757 and L1758, the two labelled lines; category
+  `test` (wrong; the log is a metrics smoke test). `get_log_lines` and `search_log` on the
+  cached log returned in under 0.1 s.
+- The action with the same model on the Postgres fixture (same run): verified diagnosis in
+  95 s, citing L450, L484 and L523 (L484 is the labelled `Connection to localhost:5432
+  refused`); category `dependency` (labelled infrastructure).
+- The action in CI on every push ([CI run 43225072783](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43225072783)):
+  a log file without a model, and a real failed run of xeeshan16/kafka-llm-enricher (fake
+  provider) with the expected job and failed step.
+- The action's default path ([action-demo run 43226611021](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43226611021)):
+  a job fails for real (`continue-on-error`, so the run stays green; the API still reports
+  the job as failed), a later job runs the action with no inputs, finds that job in the
+  current run, and its annotation names L124, `FAILED ...::test_ten_items_get_the_bulk_discount
+  - assert 50.0 == 45.0`, the line a developer needs.
+- GitLab against the real API: gitlab.com lists a public pipeline's failed jobs without a
+  token (200) but refuses the job and its trace (401) and the raw web log (403). The live
+  test now checks that a user without a token gets an error naming `GITLAB_TOKEN`; the
+  authenticated path is covered by mocked responses only.
+- 396 tests pass locally (the 2 live API tests run in CI only) and in CI on Python 3.11 to
+  3.13, coverage 96%.
+
+**Found along the way**
+- The first action job in CI failed: two invocations in one job wrote the same briefs file,
+  and the check read `GITHUB_STEP_SUMMARY` from a later step, where it is a different file.
+  Fixed in `0c181f1`.
+- gitlab.com's anonymous access is narrower than its docs suggest for public projects; the
+  docstring, the error message and the README now say a token is needed.
+- The MCP SDK (2.3) speaks a newer protocol (2026-07-28) with a `server/discover` probe and
+  falls back to the handshake on "method not found"; the server relies on that fallback.
+
+**Next (Day 6):** production concerns: OpenTelemetry traces and metrics (per stage, per
+model call), token and cost accounting in the brief, concurrent multi-job runs, a Docker
+image built and smoke-tested in CI, and a threat model.

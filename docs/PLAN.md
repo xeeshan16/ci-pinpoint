@@ -65,3 +65,10 @@ project completed.
   than all 189 logs: a full run needs about 56 s per re-rank call on a CPU runner and did not
   fit the workflow's time limit. The diagnosis-prompt changes were checked on the six real
   logs and on the same 20 test-split logs as day 3 (before/after, not tuned on them).
+- Day 5 found that gitlab.com refuses job logs without a token even for public projects
+  (401 on the job and trace endpoints, 403 on the raw web log), so the GitLab path is
+  verified live only for its no-token error, and with mocked responses otherwise.
+- Day 5 added CLI outputs for CI (`--summary-file`, `--json-out`, `--github-annotations`),
+  which the action is built on, and an MCP session plus an action run to the real-model
+  workflow, so the agent-facing output is recorded with a real model.
+

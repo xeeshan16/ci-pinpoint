@@ -8,10 +8,12 @@ of a 200,000-token log.
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-> Status: **day 4 of 7**, working end to end on real logs, measured on a public labelled
+> Status: **day 5 of 7**. Works end to end on real logs, measured on a public labelled
 > dataset ([results](#evaluation)), with secrets redacted and log text treated as untrusted
-> input ([how](#untrusted-logs-secrets-and-prompt-injection)). The MCP server and the GitHub
-> Action land later this week (see [docs/PLAN.md](docs/PLAN.md)).
+> input ([how](#untrusted-logs-secrets-and-prompt-injection)). Use it from the command line,
+> from a coding agent over [MCP](#from-a-coding-agent-mcp), or as a
+> [GitHub Action](#in-github-actions); GitHub Actions and GitLab runs both work. Tracing,
+> cost accounting and a Docker image come next (see [docs/PLAN.md](docs/PLAN.md)).
 
 ## What it does
 
@@ -72,8 +74,9 @@ _Excerpt: 961 of ~63,069 tokens (98.5% smaller), 3 block(s)._
 ```
 
 The cited lines are right; the category (`compile`) and the last sentence of the root cause
-are not: the metrics were missing from the export, the app had started. Category quality is a
-day 4 item. On all six labelled logs in that run, a 3B local model produced a verified
+are not: the metrics were missing from the export, the app had started. The day 4 taxonomy
+did not fix categories for a 3B model, so agent-facing output labels the category a hint.
+On all six labelled logs in that run, a 3B local model produced a verified
 diagnosis for 5 and cited the labelled root-cause line in 4 (details in
 [docs/PROGRESS.md](docs/PROGRESS.md)). These are six logs, not an evaluation.
 <!-- sample-output:end -->
@@ -97,6 +100,10 @@ ci-pinpoint explain build.log
 kubectl logs job/integration-tests | ci-pinpoint explain -
 ```
 
+GitLab works the same way: `ci-pinpoint explain https://gitlab.com/<group>/<project>/-/jobs/<id>`
+(or a `/-/pipelines/<id>` URL for all its failed jobs), with `GITLAB_TOKEN` set: gitlab.com
+answers 401 for job logs without one, even on public projects.
+
 Running `explain` again on the same log with the same settings is answered from the local
 cache, with no model call. Useful flags: `--format markdown|json` (Markdown for PR comments and job summaries, JSON for
 agents and scripts), `--no-llm` (just the selected lines), `--budget 4000` (excerpt size in
@@ -106,6 +113,71 @@ tokens), `--rerank` (one extra model call to re-rank candidate blocks), `--no-re
 Exit codes: `0` diagnosed with at least one verified citation (or `--no-llm`), `1` the model
 could not produce a verified diagnosis (the selected lines are still printed), `2` bad input
 or configuration.
+
+### From a coding agent (MCP)
+
+`ci-pinpoint mcp` is an MCP server over stdio with four tools: `diagnose_run` (the brief),
+`get_excerpt` (the selected lines, no model), `search_log` and `get_log_lines` (to follow a
+citation). The agent gets a few-KB brief instead of the raw log. In Claude Code:
+
+```bash
+claude mcp add ci-pinpoint --env GITHUB_TOKEN=$(gh auth token) \
+  -- uvx --from git+https://github.com/xeeshan16/ci-pinpoint ci-pinpoint mcp
+```
+
+Then ask: *"CI failed on https://github.com/acme/app/actions/runs/123, find out why and fix
+it."* What the agent gets back from `diagnose_run`, recorded with the official MCP Python SDK
+client and Ollama `qwen2.5:3b` on a CPU-only runner (82.8 s;
+[real-model run 43226199981](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43226199981)):
+
+```markdown
+**The application failed to export all required metrics, causing the build to fail.**
+
+`test` (category hint) · confidence 0.95 · `ollama/qwen2.5:3b`
+
+**Root cause.** The application did not export the required metrics 'gen_ai_request_model'
+and 'gen_ai_token_type', resulting in a missing value error. [...]
+
+**Evidence** (each line checked against the log):
+
+- `L1757` `MISSING              gen_ai_request_model`
+- `L1758` `MISSING              gen_ai_token_type`
+
+_Excerpt: 1,978 of ~63,069 tokens (96.9% smaller), 5 block(s)._
+```
+
+The cited lines are exactly the labelled ones; the category is not (this was a smoke test
+of exported metrics), which is why agent-facing output calls it a hint. A follow-up
+`get_log_lines` around L1757 returned in under 0.1 s from the in-memory cache. Ready-to-paste configs for Cursor and VS Code are in [examples/mcp](examples/mcp); the
+tools, safety properties (redaction, untrusted-text labels, file roots, token scoping) and
+protocol support are in [docs/mcp.md](docs/mcp.md).
+
+### In GitHub Actions
+
+Add a job that runs when another job fails. It writes the brief to the run's summary page,
+adds an annotation per failed job, and exposes the brief as outputs:
+
+```yaml
+  explain:
+    needs: [test]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - uses: xeeshan16/ci-pinpoint@main
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # optional
+```
+
+Without a model configured it reports the selected log lines only (a hosted runner has no
+local Ollama). Inputs: `source` (defaults to the current run), `provider`, `model`,
+`base-url`, `budget`, `no-llm`, `annotate`, `github-token`. Outputs: `brief-json`,
+`summary`, `diagnosed`. More in [examples/workflows](examples/workflows), including a
+`workflow_run` variant for explaining another workflow's failures. Outputs contain model
+text derived from the log: pass them to scripts through `env`, never inline with `${{ }}`.
+The CLI has the same pieces for other CI systems: `--summary-file`, `--json-out` and
+`--github-annotations`.
 
 ## Configuration
 
@@ -121,6 +193,8 @@ directory (or the file named by `CI_PINPOINT_CONFIG`). See [.env.example](.env.e
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | | hosted providers |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` | | Azure OpenAI |
 | `GITHUB_TOKEN` / `GH_TOKEN` | | download Actions logs; `GITHUB_API_URL` for GitHub Enterprise |
+| `GITLAB_TOKEN` | | download GitLab job logs (`read_api`); `CI_JOB_TOKEN` inside GitLab CI. Sent only to gitlab.com or the host in `GITLAB_API_URL` / `CI_API_V4_URL` / `CI_SERVER_HOST` / `GITLAB_HOST` |
+| `CI_PINPOINT_MCP_ROOTS` | working directory | directories the MCP server may read log files from (`:`-separated) |
 | `CI_PINPOINT_BUDGET_TOKENS` | `2000` | excerpt size sent to the model |
 | `CI_PINPOINT_TIMEOUT_S`, `CI_PINPOINT_MAX_RETRIES` | `120`, `3` | per-call timeout, retries with backoff |
 | `CI_PINPOINT_EMBEDDER`, `CI_PINPOINT_EMBED_MODEL` | `none` | block re-ranking: `ollama` (`nomic-embed-text`), `openai` (`text-embedding-3-small`), `openai-compatible` (+ `CI_PINPOINT_EMBED_BASE_URL`), `auto` |
@@ -136,7 +210,7 @@ With `auto`, the provider is picked from what is set: `ANTHROPIC_API_KEY`, then
 
 ```mermaid
 flowchart LR
-    A[log file / stdin /<br/>GitHub run URL] --> B[normalise<br/>timestamps, ANSI, groups,<br/>annotations, raw line numbers]
+    A[log file / stdin /<br/>GitHub run or GitLab job URL] --> B[normalise<br/>timestamps, ANSI, groups,<br/>annotations, raw line numbers]
     B --> S[redact secrets<br/>tokens, keys, URL creds]
     S --> T[mine templates<br/>Drain-style]
     T --> C[score lines<br/>signals, negatives,<br/>rarity, failed-step boost]
@@ -148,6 +222,9 @@ flowchart LR
     F -->|invalid or unverifiable| E
     F --> H[output checks<br/>steered? risky fix?]
     H --> G[brief: text / Markdown / JSON<br/>with warnings]
+    G --> O1[CLI]
+    G --> O2[MCP tools<br/>for coding agents]
+    G --> O3[GitHub Action<br/>job summary + annotations]
 ```
 
 1. **Normalise.** Strip timestamps, ANSI codes and progress-bar redraws; split on GitHub
@@ -292,7 +369,12 @@ labelled with the root-cause line(s); a test enforces that selection keeps those
 - Small local models are weak at the category field (2 of 6 right on the labelled logs with
   `qwen2.5:3b`); treat it as a hint. Citations and the root cause are the useful part.
 - Token counts are estimates (3.5 characters per token), not tokenizer-exact.
-- GitHub Actions URLs only; GitLab logs work as files or stdin.
+- Fetching by URL covers GitHub Actions and GitLab (gitlab.com needs a token for job logs,
+  even on public projects); other CI systems work through files or stdin. The GitLab
+  client is tested against the real API's behaviour without a token, and with mocked
+  responses for authenticated calls; it has not yet been run with a real token.
+- The MCP server speaks the stdio handshake protocol (2024-11-05 to 2025-11-25); clients
+  that only speak the 2026-07-28 protocol are not supported yet.
 - Redaction uses known formats and secret-named assignments; a secret in an unknown format
   printed on its own will not be caught. Review logs before sending them to a hosted model
   if your jobs print credentials.

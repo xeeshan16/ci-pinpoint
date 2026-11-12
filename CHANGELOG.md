@@ -7,6 +7,22 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `ci-pinpoint mcp`: an MCP server over stdio for coding agents, with `diagnose_run`,
+  `get_excerpt`, `search_log` and `get_log_lines` for GitHub runs, GitLab jobs and log
+  files. Redacted output labelled as untrusted, instruction-like lines marked, file access
+  confined to `CI_PINPOINT_MCP_ROOTS`, bounded regex search, an in-memory log cache,
+  progress notifications and cancellation, and excerpts even without a model. Protocol
+  versions 2024-11-05 to 2025-11-25, tested with the official MCP Python SDK client. Configs
+  for Claude Code, Cursor and VS Code in `examples/mcp`, guide in `docs/mcp.md`.
+- A GitHub Action (`action.yml`): explains the failed jobs of the current run (or any
+  `source`) into the job summary, adds an annotation per job, and outputs `brief-json`,
+  `summary` and `diagnosed`. Reports the selected lines when no model is configured.
+  Example workflows in `examples/workflows`.
+- GitLab job and pipeline URLs (gitlab.com and self-managed) with `GITLAB_TOKEN` or
+  `CI_JOB_TOKEN`; tokens are only sent to gitlab.com or the configured GitLab host. The
+  runner's `ERROR: Job failed` line marks the script section as the failed step, and
+  `$ command` echoes score as commands.
+- `explain --summary-file`, `--json-out` and `--github-annotations` for CI systems.
 - Secret redaction before selection, prompts, cache and output: GitHub, GitLab, AWS,
   Slack, Google, Stripe, npm and LLM API keys, JWTs, URL credentials, authorization
   headers, secret-named assignments and PEM private key blocks. The brief counts
