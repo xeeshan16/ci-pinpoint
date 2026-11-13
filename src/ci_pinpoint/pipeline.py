@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Mapping
 
 from ci_pinpoint.cache import BriefCache, brief_key
 from ci_pinpoint.config import Settings
@@ -11,6 +13,7 @@ from ci_pinpoint.diagnose.prompt import PROMPT_VERSION
 from ci_pinpoint.heuristics import build_excerpt
 from ci_pinpoint.injection import flag_lines
 from ci_pinpoint.models import (
+    Accounting,
     Brief,
     ElisionOut,
     Excerpt,
@@ -18,12 +21,14 @@ from ci_pinpoint.models import (
     LogStats,
     NormalizedLog,
     RawLog,
+    TokenUsage,
 )
 from ci_pinpoint.normalize import normalize
+from ci_pinpoint.pricing import price_for
 from ci_pinpoint.providers.base import ChatModel, ProviderError
 from ci_pinpoint.redact import redact_log
 from ci_pinpoint.rerank import PROMPT_VERSION as RERANK_PROMPT_VERSION
-from ci_pinpoint.rerank import NamedRanker
+from ci_pinpoint.rerank import NamedRanker, ranker_usage
 from ci_pinpoint.tokens import estimate_lines_tokens
 
 log = logging.getLogger(__name__)
@@ -73,6 +78,22 @@ def _cache_key(raw: RawLog, settings: Settings, chat: ChatModel, ranker: NamedRa
     )
 
 
+def _accounting(
+    chat: ChatModel | None, usage: TokenUsage, env: Mapping[str, str]
+) -> Accounting | None:
+    """Tokens and estimated cost for the model work, or None without a model."""
+    if chat is None:
+        return None
+    price = price_for(chat.provider, chat.model, env)
+    return Accounting(
+        provider=chat.provider,
+        model=chat.model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cost_usd=price.cost(usage) if price is not None else None,
+    )
+
+
 def explain(
     raw: RawLog,
     settings: Settings,
@@ -80,12 +101,14 @@ def explain(
     *,
     ranker: NamedRanker | None = None,
     cache: BriefCache | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> Brief:
     """Normalise, select an excerpt and (if a model is given) diagnose one log.
 
     With a cache, a verified diagnosis of the same log under the same settings
     is returned without calling any model.
     """
+    env = os.environ if env is None else env
     key = _cache_key(raw, settings, chat, ranker) if cache and chat else None
     if cache and key:
         hit = cache.get(key)
@@ -104,7 +127,9 @@ def explain(
                 "secrets redacted from the log",
                 extra={"source": raw.source, "redactions": redactions},
             )
+    rerank_before = ranker_usage(ranker)
     excerpt = build_excerpt(normalized, settings.budget_tokens, ranker)
+    rerank_usage = ranker_usage(ranker) - rerank_before
     stats = _stats(normalized, excerpt)
     brief = Brief(
         source=raw.source,
@@ -119,6 +144,7 @@ def explain(
         untrusted_lines=sorted(
             flag_lines(line for block in excerpt.blocks for line in block.lines)
         ),
+        accounting=_accounting(chat, rerank_usage, env),
     )
     log.info(
         "excerpt selected",
@@ -146,7 +172,8 @@ def explain(
         )
     except (ProviderError, DiagnosisFailedError) as exc:
         return brief.model_copy(update={"error": str(exc)})
-    brief = brief.model_copy(update={"diagnosis": result})
+    accounting = _accounting(chat, result.usage + rerank_usage, env)
+    brief = brief.model_copy(update={"diagnosis": result, "accounting": accounting})
     if cache and key and result.verified:
         cache.put(key, brief)
     return brief

@@ -252,6 +252,10 @@ class ChainRanker:
         self._rankers = list(rankers)
 
     @property
+    def rankers(self) -> list[NamedRanker]:
+        return list(self._rankers)
+
+    @property
     def model(self) -> str:
         return " + ".join(r.model for r in self._rankers)
 
@@ -264,3 +268,15 @@ class ChainRanker:
         for ranker in self._rankers:
             out = ranker.rank(out, ctx)
         return out
+
+
+def ranker_usage(ranker: NamedRanker | None) -> TokenUsage:
+    """Chat-model tokens a ranker has spent so far (cumulative; zero for others)."""
+    if isinstance(ranker, LLMRanker):
+        return ranker.usage
+    if isinstance(ranker, ChainRanker):
+        total = TokenUsage()
+        for inner in ranker.rankers:
+            total = total + ranker_usage(inner)
+        return total
+    return TokenUsage()

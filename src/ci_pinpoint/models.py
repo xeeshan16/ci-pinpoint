@@ -169,6 +169,35 @@ class TokenUsage(BaseModel):
             output_tokens=self.output_tokens + other.output_tokens,
         )
 
+    def __sub__(self, other: TokenUsage) -> TokenUsage:
+        """Non-negative difference, for a usage delta over one call."""
+        return TokenUsage(
+            input_tokens=max(0, self.input_tokens - other.input_tokens),
+            output_tokens=max(0, self.output_tokens - other.output_tokens),
+        )
+
+    @property
+    def total(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+class Accounting(BaseModel):
+    """What the model work for one brief used and, where priced, cost.
+
+    Covers the chat model (diagnosis plus any LLM re-ranking). Embedding calls
+    are not counted: embedders do not report token usage.
+    """
+
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float | None = Field(
+        default=None,
+        description="Estimated USD cost, or null when no price is known for the model. "
+        "Based on indicative list prices; override with CI_PINPOINT_PRICE_IN/OUT.",
+    )
+
 
 class DiagnosisResult(BaseModel):
     diagnosis: Diagnosis
@@ -248,4 +277,8 @@ class Brief(BaseModel):
         default_factory=dict,
         description="Secrets replaced with [REDACTED:<kind>] before anything was selected "
         "or sent to a model, counted by kind. The values are never kept.",
+    )
+    accounting: Accounting | None = Field(
+        default=None,
+        description="Model tokens and estimated cost for this brief, when a model ran.",
     )

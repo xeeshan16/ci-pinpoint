@@ -6,7 +6,7 @@ import json
 from collections.abc import Sequence
 
 from ci_pinpoint.heuristics import score_text
-from ci_pinpoint.models import Brief, CitationStatus
+from ci_pinpoint.models import Accounting, Brief, CitationStatus
 
 FORMATS = ("text", "markdown", "json")
 MAX_LINE_CHARS = 240
@@ -66,6 +66,25 @@ def _notes(brief: Brief, shape: str) -> list[str]:
     return [shape.format(note) for note in notes if note]
 
 
+def _format_cost(cost: float | None) -> str:
+    if cost is None:
+        return "cost n/a"
+    if cost == 0:
+        return "free"
+    if cost < 0.01:
+        return f"~${cost:.4f}"
+    return f"~${cost:.2f}"
+
+
+def _accounting_line(acc: Accounting | None) -> str | None:
+    """A one-line token and cost summary, or None when no model ran or it used nothing."""
+    if acc is None or (acc.input_tokens == 0 and acc.output_tokens == 0):
+        return None
+    cost = _format_cost(acc.cost_usd)
+    suffix = f" ({acc.model})" if acc.cost_usd is None else ""
+    return f"model: {acc.input_tokens:,} in / {acc.output_tokens:,} out tokens · {cost}{suffix}"
+
+
 def _reduction(brief: Brief) -> str:
     s = brief.stats
     text = (
@@ -122,7 +141,11 @@ def render_text(brief: Brief, *, show_excerpt: bool = False) -> str:
         show_excerpt = True
     else:
         show_excerpt = True
-    out += ["", f"  excerpt: {_reduction(brief)}", *_notes(brief, "  {}")]
+    out += ["", f"  excerpt: {_reduction(brief)}"]
+    cost_line = _accounting_line(brief.accounting)
+    if cost_line:
+        out.append(f"  {cost_line}")
+    out += _notes(brief, "  {}")
     if show_excerpt:
         out += ["", *[f"  {line}" for line in excerpt_lines(brief)]]
     return "\n".join(out)
@@ -161,7 +184,11 @@ def render_markdown(brief: Brief, *, show_excerpt: bool = True, category_hint: b
             out += ["", *[f"> ⚠ {w}" for w in d.warnings]]
     elif brief.error:
         out += ["", f"> diagnosis failed: {brief.error}"]
-    out += ["", f"_Excerpt: {_reduction(brief)}._", *_notes(brief, "_{}._")]
+    out += ["", f"_Excerpt: {_reduction(brief)}._"]
+    cost_line = _accounting_line(brief.accounting)
+    if cost_line:
+        out.append(f"_{cost_line}._")
+    out += _notes(brief, "_{}._")
     if show_excerpt and brief.excerpt:
         out += [
             "",
