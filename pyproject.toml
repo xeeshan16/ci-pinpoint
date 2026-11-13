@@ -25,6 +25,13 @@ dependencies = [
   "pydantic>=2.7,<3",
 ]
 
+[project.optional-dependencies]
+# Traces and metrics. Off unless CI_PINPOINT_OTEL=1; see docs/observability.md.
+otel = [
+  "opentelemetry-sdk>=1.27,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
+]
+
 [project.urls]
 Homepage = "https://github.com/xeeshan16/ci-pinpoint"
 Issues = "https://github.com/xeeshan16/ci-pinpoint/issues"
@@ -40,6 +47,9 @@ dev = [
   "pytest>=8",
   "pytest-cov>=5",
   "ruff>=0.6",
+  # So the telemetry path is type-checked and tested; shipped only via the otel extra.
+  "opentelemetry-sdk>=1.27,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
 ]
 
 [build-system]
@@ -68,6 +78,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "PLR", "PLC0415"]
 "examples/**" = ["S101"]
+# Telemetry is an optional dependency loaded lazily, behind a module-level singleton.
+"src/ci_pinpoint/telemetry.py" = ["PLC0415", "PLW0603"]
 
 [tool.mypy]
 python_version = "3.11"

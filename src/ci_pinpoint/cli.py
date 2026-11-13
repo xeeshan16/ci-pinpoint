@@ -27,6 +27,7 @@ from ci_pinpoint.models import Brief
 from ci_pinpoint.pipeline import explain
 from ci_pinpoint.render import FORMATS, github_annotation, render
 from ci_pinpoint.runtime import Runtime, build_runtime
+from ci_pinpoint.telemetry import configure as configure_telemetry
 
 log = logging.getLogger(__name__)
 
@@ -159,6 +160,7 @@ def run(
     err = stderr or sys.stderr
     args = _parser().parse_args(argv)
     configure(args.verbose, env)
+    configure_telemetry(env)
     if args.command == "eval":
         return eval_command.run_eval(args, env, out, err)
     if args.command == "mcp":

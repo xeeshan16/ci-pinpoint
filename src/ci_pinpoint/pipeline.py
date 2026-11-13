@@ -29,6 +29,7 @@ from ci_pinpoint.providers.base import ChatModel, ProviderError
 from ci_pinpoint.redact import redact_log
 from ci_pinpoint.rerank import PROMPT_VERSION as RERANK_PROMPT_VERSION
 from ci_pinpoint.rerank import NamedRanker, ranker_usage
+from ci_pinpoint.telemetry import get_telemetry
 from ci_pinpoint.tokens import estimate_lines_tokens
 
 log = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ def explain(
     is returned without calling any model.
     """
     env = os.environ if env is None else env
+    telemetry = get_telemetry()
     key = _cache_key(raw, settings, chat, ranker) if cache and chat else None
     if cache and key:
         hit = cache.get(key)
@@ -118,18 +120,20 @@ def explain(
                 update={"cached": True, "source": raw.source, "job_url": raw.job_url}
             )
 
-    normalized = normalize(raw.text)
-    redactions: dict[str, int] = {}
-    if settings.redact:
-        normalized, redactions = redact_log(normalized)
-        if redactions:
-            log.warning(
-                "secrets redacted from the log",
-                extra={"source": raw.source, "redactions": redactions},
-            )
-    rerank_before = ranker_usage(ranker)
-    excerpt = build_excerpt(normalized, settings.budget_tokens, ranker)
-    rerank_usage = ranker_usage(ranker) - rerank_before
+    with telemetry.stage("normalize", source=raw.source):
+        normalized = normalize(raw.text)
+        redactions: dict[str, int] = {}
+        if settings.redact:
+            normalized, redactions = redact_log(normalized)
+            if redactions:
+                log.warning(
+                    "secrets redacted from the log",
+                    extra={"source": raw.source, "redactions": redactions},
+                )
+    with telemetry.stage("select", source=raw.source, budget_tokens=settings.budget_tokens):
+        rerank_before = ranker_usage(ranker)
+        excerpt = build_excerpt(normalized, settings.budget_tokens, ranker)
+        rerank_usage = ranker_usage(ranker) - rerank_before
     stats = _stats(normalized, excerpt)
     brief = Brief(
         source=raw.source,
@@ -158,22 +162,27 @@ def explain(
         },
     )
     if chat is None or not excerpt.blocks:
+        telemetry.record_brief(brief)
         return brief
-    try:
-        result = diagnose(
-            chat,
-            normalized,
-            excerpt,
-            source=raw.source,
-            job_name=raw.job_name,
-            failed_steps=brief.failed_steps,
-            max_output_tokens=settings.max_output_tokens,
-            repair_attempts=settings.repair_attempts,
-        )
-    except (ProviderError, DiagnosisFailedError) as exc:
-        return brief.model_copy(update={"error": str(exc)})
+    with telemetry.stage("diagnose", source=raw.source, provider=chat.provider, model=chat.model):
+        try:
+            result = diagnose(
+                chat,
+                normalized,
+                excerpt,
+                source=raw.source,
+                job_name=raw.job_name,
+                failed_steps=brief.failed_steps,
+                max_output_tokens=settings.max_output_tokens,
+                repair_attempts=settings.repair_attempts,
+            )
+        except (ProviderError, DiagnosisFailedError) as exc:
+            brief = brief.model_copy(update={"error": str(exc)})
+            telemetry.record_brief(brief)
+            return brief
     accounting = _accounting(chat, result.usage + rerank_usage, env)
     brief = brief.model_copy(update={"diagnosis": result, "accounting": accounting})
+    telemetry.record_brief(brief)
     if cache and key and result.verified:
         cache.put(key, brief)
     return brief
