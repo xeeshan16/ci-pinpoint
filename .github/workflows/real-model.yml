@@ -29,7 +29,8 @@ jobs:
   ollama:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # Several full passes over the fixtures on a CPU runner; 75 min clipped the last step.
+    timeout-minutes: 110
     env:
       MODEL: ${{ inputs.model || 'qwen2.5:3b' }}
       EMBED_MODEL: nomic-embed-text

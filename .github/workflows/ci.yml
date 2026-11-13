@@ -201,3 +201,41 @@ jobs:
           path: |
             dist/
             reports/
+
+  docker:
+    name: docker image, smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ci-pinpoint:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: run the installed tool in the container
+        run: |
+          docker run --rm ci-pinpoint:ci --version
+          # Mount the checkout read-only and diagnose a bundled fixture (fake provider).
+          docker run --rm -v "$PWD:/work:ro" ci-pinpoint:ci \
+            explain tests/fixtures/logs/smoke-test-missing-metrics.log.gz \
+            --provider fake --no-cache --format json > brief.json
+          python3 - <<'PY'
+          import json
+          brief = json.load(open("brief.json"))
+          assert brief["diagnosis"]["verified"], "no verified citation from the container"
+          assert brief["stats"]["reduction"] > 0.9, brief["stats"]
+          print("container ok:", brief["stats"]["excerpt_tokens"], "excerpt tokens")
+          PY
+      - name: the MCP server starts in the container
+        run: |
+          # initialize/handshake over stdio, then exit: proves the agent entrypoint works.
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+            | docker run --rm -i ci-pinpoint:ci mcp --no-llm > mcp.txt
+          grep -q '"serverInfo"' mcp.txt || { cat mcp.txt; exit 1; }
