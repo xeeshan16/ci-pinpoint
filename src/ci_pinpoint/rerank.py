@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import replace
@@ -170,6 +171,8 @@ class LLMRanker:
         self.calls = 0
         self.failures = 0
         self.latency_s = 0.0
+        # Guards the counters above when several jobs re-rank concurrently.
+        self._lock = threading.Lock()
 
     @property
     def model(self) -> str:
@@ -186,7 +189,8 @@ class LLMRanker:
         )
         ordered_candidates = sorted(candidates, key=lambda b: b.start)
         started = time.perf_counter()
-        self.calls += 1
+        with self._lock:
+            self.calls += 1
         try:
             completion = self._chat.complete(
                 messages,
@@ -195,18 +199,21 @@ class LLMRanker:
                 json_mode=True,
                 json_schema=RERANK_SCHEMA,
             )
-            self.usage = self.usage + completion.usage
+            with self._lock:
+                self.usage = self.usage + completion.usage
             ranking = parse_ranking(completion.text, len(ordered_candidates))
         except (ProviderError, ValueError) as exc:
-            self.failures += 1
-            self.error = str(exc)
+            with self._lock:
+                self.failures += 1
+                self.error = str(exc)
             log.warning(
                 "LLM re-ranking skipped, using heuristic order",
                 extra={"model": self.model, "error": self.error},
             )
             return list(blocks)
         finally:
-            self.latency_s += time.perf_counter() - started
+            with self._lock:
+                self.latency_s += time.perf_counter() - started
         # Linear relevance by position: first 1.0, last ranked 0.2, unranked 0.
         relevance: dict[int, float] = {}
         for position, number in enumerate(ranking):

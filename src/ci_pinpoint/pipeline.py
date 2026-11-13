@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 from ci_pinpoint.cache import BriefCache, brief_key
 from ci_pinpoint.config import Settings
@@ -186,3 +187,33 @@ def explain(
     if cache and key and result.verified:
         cache.put(key, brief)
     return brief
+
+
+def explain_all(
+    raws: Sequence[RawLog],
+    settings: Settings,
+    chat: ChatModel | None,
+    *,
+    ranker: NamedRanker | None = None,
+    cache: BriefCache | None = None,
+    env: Mapping[str, str] | None = None,
+) -> list[Brief]:
+    """Diagnose several jobs, concurrently when ``settings.concurrency`` allows.
+
+    The jobs are independent, so each runs on its own thread; the returned
+    briefs keep the order of ``raws``. One job, or a concurrency of 1, runs
+    inline. A failing job still returns a brief (with ``error`` set), so one bad
+    job never sinks the batch.
+    """
+    workers = min(settings.concurrency, len(raws))
+    if workers <= 1:
+        return [explain(raw, settings, chat, ranker=ranker, cache=cache, env=env) for raw in raws]
+    results: list[Brief | None] = [None] * len(raws)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ci-pinpoint") as pool:
+        futures = {
+            pool.submit(explain, raw, settings, chat, ranker=ranker, cache=cache, env=env): i
+            for i, raw in enumerate(raws)
+        }
+        for future, index in futures.items():
+            results[index] = future.result()
+    return [brief for brief in results if brief is not None]

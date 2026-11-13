@@ -19,6 +19,7 @@ import logging
 import os
 import sqlite3
 import tempfile
+import threading
 from array import array
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -84,11 +85,13 @@ class BriefCache:
 
 
 class EmbeddingStore:
-    """SQLite-backed vector cache. Safe to share between processes."""
+    """SQLite-backed vector cache. Safe to share between processes and threads."""
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path, timeout=10.0)
+        # check_same_thread=False so a worker thread can read it; a lock serialises access.
+        self._db = sqlite3.connect(path, timeout=10.0, check_same_thread=False)
+        self._lock = threading.Lock()
         try:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute(
@@ -104,28 +107,31 @@ class EmbeddingStore:
     def get_many(self, model: str, digests: Sequence[str]) -> dict[str, list[float]]:
         found: dict[str, list[float]] = {}
         unique = list(dict.fromkeys(digests))
-        for start in range(0, len(unique), 500):
-            chunk = unique[start : start + 500]
-            marks = ",".join("?" * len(chunk))
-            rows = self._db.execute(
-                f"SELECT digest, data FROM vectors WHERE model = ? AND digest IN ({marks})",  # noqa: S608 - placeholders only
-                [model, *chunk],
-            )
-            for digest, blob in rows:
-                vec = array("f")
-                vec.frombytes(blob)
-                found[digest] = vec.tolist()
+        with self._lock:
+            for start in range(0, len(unique), 500):
+                chunk = unique[start : start + 500]
+                marks = ",".join("?" * len(chunk))
+                rows = self._db.execute(
+                    f"SELECT digest, data FROM vectors WHERE model = ? AND digest IN ({marks})",  # noqa: S608 - placeholders only
+                    [model, *chunk],
+                )
+                for digest, blob in rows:
+                    vec = array("f")
+                    vec.frombytes(blob)
+                    found[digest] = vec.tolist()
         return found
 
     def put_many(self, model: str, items: Mapping[str, Sequence[float]]) -> None:
-        self._db.executemany(
-            "INSERT OR REPLACE INTO vectors (model, digest, data) VALUES (?, ?, ?)",
-            [(model, digest, array("f", vec).tobytes()) for digest, vec in items.items()],
-        )
-        self._db.commit()
+        with self._lock:
+            self._db.executemany(
+                "INSERT OR REPLACE INTO vectors (model, digest, data) VALUES (?, ?, ?)",
+                [(model, digest, array("f", vec).tobytes()) for digest, vec in items.items()],
+            )
+            self._db.commit()
 
     def close(self) -> None:
-        self._db.close()
+        with self._lock:
+            self._db.close()
 
 
 class CachedEmbedder:

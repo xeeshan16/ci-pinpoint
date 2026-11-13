@@ -24,7 +24,7 @@ from ci_pinpoint.ingest import GitHubError, GitLabError, SourceError, load_sourc
 from ci_pinpoint.logging_setup import configure
 from ci_pinpoint.mcp_server import serve_stdio
 from ci_pinpoint.models import Brief
-from ci_pinpoint.pipeline import explain
+from ci_pinpoint.pipeline import explain_all
 from ci_pinpoint.render import FORMATS, github_annotation, render
 from ci_pinpoint.runtime import Runtime, build_runtime
 from ci_pinpoint.telemetry import configure as configure_telemetry
@@ -69,6 +69,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="let the chat model re-rank candidate blocks before selection (one extra call)",
+    )
+    ex.add_argument(
+        "--concurrency",
+        type=int,
+        help="max failed jobs of a run to diagnose at once (default 4; local models serialise)",
     )
     ex.add_argument("--no-llm", action="store_true", help="only select and print the log lines")
     ex.add_argument("--no-cache", action="store_true", help="ignore and don't write the cache")
@@ -180,6 +185,7 @@ def run(
                 "embed_model": args.embed_model,
                 "redact": False if args.no_redact else None,
                 "rerank": args.rerank,
+                "concurrency": args.concurrency,
             },
         )
         runtime = build_runtime(settings, env, use_llm=not args.no_llm, use_cache=not args.no_cache)
@@ -197,10 +203,14 @@ def run(
         return EXIT_USAGE
 
     try:
-        briefs = [
-            explain(raw, settings, runtime.chat, ranker=runtime.ranker, cache=runtime.cache)
-            for raw in raws
-        ]
+        briefs = explain_all(
+            raws,
+            settings,
+            runtime.chat,
+            ranker=runtime.ranker,
+            cache=runtime.cache,
+            env=env,
+        )
     finally:
         runtime.close()
     print(render(briefs, args.format, show_excerpt=args.show_excerpt), file=out)

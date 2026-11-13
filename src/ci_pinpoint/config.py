@@ -5,7 +5,7 @@ Config file: ``.ci-pinpoint.toml`` in the working directory, or the path in
 ``CI_PINPOINT_`` prefix, lower-cased (``provider``, ``model``, ``base_url``,
 ``budget_tokens``, ``timeout_s``, ``max_retries``, ``max_output_tokens``,
 ``repair_attempts``, ``embedder``, ``embed_model``, ``rerank``, ``redact``,
-``cache_dir``).
+``cache_dir``, ``concurrency``).
 """
 
 from __future__ import annotations
@@ -50,6 +50,9 @@ class Settings:
     # Secrets are redacted from every log line before selection, prompts and output.
     redact: bool = True
     cache_dir: str | None = None
+    # Failed jobs of one run are diagnosed concurrently up to this many at a time.
+    # Local models (Ollama) serialise anyway, so this mainly helps hosted providers.
+    concurrency: int = 4
     github_api_url: str = "https://api.github.com"
 
     def validate(self) -> Settings:
@@ -69,6 +72,8 @@ class Settings:
             )
         if not 0 <= self.repair_attempts <= 3:
             raise ConfigError("repair_attempts must be between 0 and 3")
+        if not 1 <= self.concurrency <= 32:
+            raise ConfigError("concurrency must be between 1 and 32")
         return self
 
 
@@ -86,6 +91,7 @@ _ENV_KEYS = {
     "rerank": "CI_PINPOINT_RERANK",
     "redact": "CI_PINPOINT_REDACT",
     "cache_dir": "CI_PINPOINT_CACHE_DIR",
+    "concurrency": "CI_PINPOINT_CONCURRENCY",
     "github_api_url": "GITHUB_API_URL",
 }
 
