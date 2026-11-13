@@ -71,4 +71,9 @@ project completed.
 - Day 5 added CLI outputs for CI (`--summary-file`, `--json-out`, `--github-annotations`),
   which the action is built on, and an MCP session plus an action run to the real-model
   workflow, so the agent-facing output is recorded with a real model.
+- Day 6 keeps cost accounting always-on (it needs no setup to be useful) but makes
+  OpenTelemetry opt-in behind an extra, so the core keeps its two runtime dependencies; and
+  it builds the Docker image in CI rather than the sandbox, which cannot pull base images.
+  Making multi-job runs concurrent required turning the "one thread at a time" provider
+  assumption into shared-safe state (the SQLite embedding cache and the re-ranker counters).
 

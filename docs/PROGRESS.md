@@ -435,3 +435,58 @@ GitHub Action (`action.yml`) that writes the brief to the job summary, and GitLa
 **Next (Day 6):** production concerns: OpenTelemetry traces and metrics (per stage, per
 model call), token and cost accounting in the brief, concurrent multi-job runs, a Docker
 image built and smoke-tested in CI, and a threat model.
+
+## Day 6: 2026-11-13, production concerns
+
+**Shipped**
+- Token and cost accounting ([ADR 0006](adr/0006-observability-and-cost-accounting.md),
+  [docs/observability.md](observability.md)). Every brief that ran a model carries
+  `accounting`: the chat model's input/output tokens (diagnosis plus any `--rerank`) and an
+  estimated USD cost. The text and Markdown briefs show it on one line. Prices come from a
+  small table of indicative list prices (`pricing.py`), matched by the longest model-name
+  substring; local providers are free, unknown hosted models show `cost n/a` rather than a
+  guess, and `CI_PINPOINT_PRICE_IN`/`OUT` override the table. Embedding calls are not counted
+  (embedders report no usage). Re-rank tokens are captured as a usage delta on the shared
+  ranker.
+- Optional OpenTelemetry (`telemetry.py`, the `otel` extra, `CI_PINPOINT_OTEL=1`): a span per
+  stage (normalize, select, diagnose) with `duration_ms`, the diagnose span tagged with
+  provider and model, and counters for model calls, input/output tokens and cost plus a
+  stage-latency histogram. OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, else the console.
+  A no-op base class means the core keeps no OpenTelemetry dependency and the off path costs
+  nothing. Log text is never placed on a span.
+- Concurrent multi-job diagnosis: `explain_all` runs a run's failed jobs on a bounded thread
+  pool (`--concurrency` / `CI_PINPOINT_CONCURRENCY`, default 4), briefs kept in input order,
+  a failing job still returning a brief. The SQLite embedding cache (`check_same_thread=False`
+  + a lock) and the `LLMRanker` counters are now thread-safe; local models serialise, so the
+  win is for hosted providers.
+- A multi-stage `Dockerfile`: the wheel is built with `python -m build`, then installed into
+  a slim `python:3.12-slim` runtime that runs as a non-root user. A CI `docker` job builds
+  the image, diagnoses a bundled fixture through the container, and starts the MCP server over
+  stdio in it.
+- [docs/threat-model.md](threat-model.md): assets, the trust-boundary diagram, mitigations
+  (injection containment and citation verification, secret redaction, MCP file confinement and
+  GitLab token scoping, DoS bounds, supply chain) and what is out of scope.
+
+**Verified**
+- 412 tests pass locally (2 live API tests run in CI only); ruff, ruff format and mypy strict
+  clean. New tests: pricing and usage math (`test_pricing.py`), telemetry spans and metrics via
+  the in-memory OTel exporters (`test_telemetry.py`), and concurrency — order preserved, jobs
+  overlap, parallel results equal serial, thread-safety under load (`test_concurrency.py`).
+- The console OTel exporter emits the stage spans and the token/cost metrics on a real
+  `explain` run (fake provider) locally.
+- The Docker build and install path (`python -m build` wheel, clean-venv install, `explain`
+  on a fixture, MCP handshake) verified locally except the base-image layers; the image itself
+  is built and smoke-tested in CI, because this sandbox cannot pull base images from
+  docker.io/ghcr.
+
+**Found along the way**
+- The provider contract said chat models were "safe from one thread at a time"; for concurrency
+  that had to become safe-to-share. httpx clients already are; the shared mutable state was the
+  SQLite embedding store (default `check_same_thread=True` would have raised in a worker) and
+  the re-ranker's usage counters. Both are now locked.
+- docker.io and ghcr.io are blocked from the build sandbox, so the Docker image is a CI
+  deliverable; the Dockerfile uses a pip-based `build` stage so it needs no extra registry.
+
+**Next (Day 7):** finish — the measured results table (tool vs baselines, dataset/provider/
+model/settings), real sample output, README polish with the Mermaid diagram, ROADMAP, a
+clean-clone quick-start check, and the `v0.1.0` tag.

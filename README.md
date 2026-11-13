@@ -100,6 +100,13 @@ ci-pinpoint explain build.log
 kubectl logs job/integration-tests | ci-pinpoint explain -
 ```
 
+Prefer a container? The image runs the same CLI (mount the directory with your logs):
+
+```bash
+docker build -t ci-pinpoint https://github.com/xeeshan16/ci-pinpoint.git
+docker run --rm -e GITHUB_TOKEN -v "$PWD:/work" ci-pinpoint explain build.log
+```
+
 GitLab works the same way: `ci-pinpoint explain https://gitlab.com/<group>/<project>/-/jobs/<id>`
 (or a `/-/pipelines/<id>` URL for all its failed jobs), with `GITLAB_TOKEN` set: gitlab.com
 answers 401 for job logs without one, even on public projects.
@@ -200,7 +207,10 @@ directory (or the file named by `CI_PINPOINT_CONFIG`). See [.env.example](.env.e
 | `CI_PINPOINT_EMBEDDER`, `CI_PINPOINT_EMBED_MODEL` | `none` | block re-ranking: `ollama` (`nomic-embed-text`), `openai` (`text-embedding-3-small`), `openai-compatible` (+ `CI_PINPOINT_EMBED_BASE_URL`), `auto` |
 | `CI_PINPOINT_RERANK` | `false` | re-rank candidate blocks with the chat model before selection (`--rerank`) |
 | `CI_PINPOINT_REDACT` | `true` | redact secrets from the log before anything else (`--no-redact` turns it off) |
+| `CI_PINPOINT_CONCURRENCY` | `4` | failed jobs of one run diagnosed at once (`--concurrency`); local models serialise |
 | `CI_PINPOINT_CACHE_DIR` | `~/.cache/ci-pinpoint` | verified briefs and embeddings; `--no-cache` or `CI_PINPOINT_NO_CACHE=1` to bypass |
+| `CI_PINPOINT_PRICE_IN`, `CI_PINPOINT_PRICE_OUT` | | USD per 1M input/output tokens, to price with your own contract (overrides the built-in table) |
+| `CI_PINPOINT_OTEL` | `false` | emit OpenTelemetry traces and metrics (needs the `otel` extra; see [observability](docs/observability.md)) |
 | `CI_PINPOINT_LOG_FORMAT` | text | `json` for structured logs on stderr |
 
 With `auto`, the provider is picked from what is set: `ANTHROPIC_API_KEY`, then
@@ -286,6 +296,25 @@ suggested fix. So ci-pinpoint treats every log line as untrusted data
 end; `scripts/injection_report.py` plants three payloads in the six real logs and runs them
 through a real model in CI (results in [docs/PROGRESS.md](docs/PROGRESS.md)).
 
+The full [threat model](docs/threat-model.md) states what ci-pinpoint defends against,
+what it does not, and where the boundaries are.
+
+## Observability and cost
+
+Every brief that ran a model reports its token usage and an estimated cost:
+
+```
+  model: 2,970 in / 359 out tokens · ~$0.0018 (gpt-4.1-mini)
+```
+
+Prices come from a small table of indicative list prices (local models are free; unknown
+models show `cost n/a`), overridable with `CI_PINPOINT_PRICE_IN` / `CI_PINPOINT_PRICE_OUT`
+for your own contract. For traces and metrics — a span per stage with latency, counters
+for model calls, tokens and cost — install the `otel` extra and set `CI_PINPOINT_OTEL=1`;
+it is a no-op otherwise, so the core keeps no OpenTelemetry dependency. See
+[docs/observability.md](docs/observability.md). A run with several failed jobs diagnoses
+them concurrently (`--concurrency`, default 4; local models serialise).
+
 ## Evaluation
 
 Does the excerpt contain the lines a human marked as the reason the build failed? Measured
@@ -368,7 +397,9 @@ labelled with the root-cause line(s); a test enforces that selection keeps those
   of recall on LogChunks, and an LLM re-rank costs about a minute per log on a CPU runner.
 - Small local models are weak at the category field (2 of 6 right on the labelled logs with
   `qwen2.5:3b`); treat it as a hint. Citations and the root cause are the useful part.
-- Token counts are estimates (3.5 characters per token), not tokenizer-exact.
+- Token counts for the excerpt are estimates (3.5 characters per token), not tokenizer-exact;
+  the `accounting` tokens come from the provider's own usage. The printed cost uses indicative
+  list prices (overridable) and is an estimate, not a quote.
 - Fetching by URL covers GitHub Actions and GitLab (gitlab.com needs a token for job logs,
   even on public projects); other CI systems work through files or stdin. The GitLab
   client is tested against the real API's behaviour without a token, and with mocked

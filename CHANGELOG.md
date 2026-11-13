@@ -7,6 +7,23 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Token and cost accounting: every brief that ran a model carries `accounting` (chat
+  input/output tokens for the diagnosis plus any re-ranking, and an estimated USD cost),
+  shown as a one-line summary in the text and Markdown briefs. Prices come from an
+  indicative list-price table (local providers free, unknown models `cost n/a`), overridable
+  with `CI_PINPOINT_PRICE_IN` / `CI_PINPOINT_PRICE_OUT`.
+- Optional OpenTelemetry traces and metrics behind the `otel` extra and `CI_PINPOINT_OTEL=1`:
+  a span per stage (normalize, select, diagnose) with latency, and counters for model
+  calls, input/output tokens and cost plus a stage-latency histogram, to an OTLP collector
+  (`OTEL_EXPORTER_OTLP_ENDPOINT`) or the console. No-op, and no dependency, when off. Log
+  text is never placed on a span. See `docs/observability.md`.
+- Concurrent multi-job diagnosis: a run with several failed jobs is diagnosed on a bounded
+  thread pool (`--concurrency` / `CI_PINPOINT_CONCURRENCY`, default 4), keeping briefs in
+  input order. The embedding cache and the LLM re-ranker's counters are now thread-safe.
+- A multi-stage `Dockerfile` (wheel built, installed into a slim non-root runtime) and a CI
+  job that builds the image and smoke-tests the installed CLI and MCP server in the container.
+- `docs/threat-model.md` stating assets, trust boundaries, mitigations and what is out of
+  scope; `docs/adr/0006` records the observability and cost-accounting decisions.
 - `ci-pinpoint mcp`: an MCP server over stdio for coding agents, with `diagnose_run`,
   `get_excerpt`, `search_log` and `get_log_lines` for GitHub runs, GitLab jobs and log
   files. Redacted output labelled as untrusted, instruction-like lines marked, file access
