@@ -92,7 +92,7 @@ selected lines still printed.
 
 ```bash
 # 1. Install (not on PyPI yet; pipx works too)
-uv tool install git+https://github.com/xeeshan16/ci-pinpoint@v0.1.0
+uv tool install git+https://github.com/xeeshan16/ci-pinpoint
 
 # 2. A local model (or set OPENAI_API_KEY / ANTHROPIC_API_KEY / the Azure variables instead)
 ollama pull qwen2.5:3b
@@ -136,7 +136,7 @@ citation). The agent gets a few-KB brief instead of the raw log. In Claude Code:
 
 ```bash
 claude mcp add ci-pinpoint --env GITHUB_TOKEN=$(gh auth token) \
-  -- uvx --from git+https://github.com/xeeshan16/ci-pinpoint@v0.1.0 ci-pinpoint mcp
+  -- uvx --from git+https://github.com/xeeshan16/ci-pinpoint ci-pinpoint mcp
 ```
 
 Then ask: *"CI failed on https://github.com/acme/app/actions/runs/123, find out why and fix
@@ -179,7 +179,7 @@ adds an annotation per failed job, and exposes the brief as outputs:
     permissions:
       actions: read
     steps:
-      - uses: xeeshan16/ci-pinpoint@v0.1.0
+      - uses: xeeshan16/ci-pinpoint
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # optional
 ```

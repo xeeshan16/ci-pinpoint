@@ -510,8 +510,8 @@ clean-clone quick-start check, and the `v0.1.0` tag.
 - README polish: a v0.1.0 status, the "What it does" example re-recorded from the current
   version (budget 800, where the `unknown PII type` line is shown), the sample output replaced
   by a current real-model brief, "Design trade-offs", "What I'd do next" and updated
-  limitations. `docs/ROADMAP.md` with good-first-issue items. Install, MCP configs and action
-  references pinned to `@v0.1.0`. Version 0.1.0, CHANGELOG release section.
+  limitations. `docs/ROADMAP.md` with good-first-issue items. Version 0.1.0, CHANGELOG
+  release section.
 
 **Measured** (CI, at commit `51ee26b`; v0.1.0 changes only the output check, docs and CI)
 - LogChunks test split, 584 logs, 2,000 tokens ([CI run 43431753783](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43431753783)):
@@ -544,6 +544,9 @@ clean-clone quick-start check, and the `v0.1.0` tag.
   warning on 5 of the 6 logs; the sixth had none, and whether the model obeyed there (the
   report's "silent") cannot be told from the job log alone. The restarted run on `9c5f2ca` ([run 43607383674](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43607383674))
   has the longer limit; its result was not in yet at the tag.
-- The repository description and topics could not be set from the build environment.
+- The repository description and topics could not be set from the build environment, and
+  pushing the `v0.1.0` tag was refused (HTTP 403), so the tag is left for the maintainer to
+  push. Install commands, MCP configs and action references therefore point at `main`
+  rather than the tag, so they work either way.
 
 **Next:** see [ROADMAP.md](ROADMAP.md).

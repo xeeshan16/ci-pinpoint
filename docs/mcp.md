@@ -36,7 +36,7 @@ Ollama by default (`ollama pull qwen2.5:3b`), or any provider from the main
 
 ```bash
 claude mcp add ci-pinpoint --env GITHUB_TOKEN=$(gh auth token) \
-  -- uvx --from git+https://github.com/xeeshan16/ci-pinpoint@v0.1.0 ci-pinpoint mcp
+  -- uvx --from git+https://github.com/xeeshan16/ci-pinpoint ci-pinpoint mcp
 ```
 
 Or commit a project-scoped `.mcp.json` like
@@ -58,7 +58,7 @@ VS Code asks for the token once and stores it securely.
 
 ```json
 { "command": "uvx",
-  "args": ["--from", "git+https://github.com/xeeshan16/ci-pinpoint@v0.1.0", "ci-pinpoint", "mcp"],
+  "args": ["--from", "git+https://github.com/xeeshan16/ci-pinpoint", "ci-pinpoint", "mcp"],
   "env": { "GITHUB_TOKEN": "..." } }
 ```
 

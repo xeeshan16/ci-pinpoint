@@ -18,7 +18,7 @@ jobs:
     if: github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
     steps:
-      - uses: xeeshan16/ci-pinpoint@v0.1.0
+      - uses: xeeshan16/ci-pinpoint
         with:
           source: ${{ github.event.workflow_run.html_url }}
           provider: anthropic
