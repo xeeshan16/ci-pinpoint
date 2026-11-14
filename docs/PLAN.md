@@ -77,3 +77,11 @@ project completed.
   Making multi-job runs concurrent required turning the "one thread at a time" provider
   assumption into shared-safe state (the SQLite embedding cache and the re-ranker counters).
 
+- Day 7 started with one fix rather than polish only: the day 6 real-model injection report
+  showed one obeyed payload reaching a brief without a warning (a dictated 25-character
+  summary fell between the sampled echo windows). The output check was fixed and unit-tested
+  with that exact reply; its real-model re-measure hit the workflow's time limit on a slow
+  runner and was restarted with a longer limit, so it lands after the tag. The release
+  numbers come from CI runs at the release code (the model-free eval in `ci`, a test-split
+  `eval` with embeddings and 40 model diagnoses, and `real-model`); the sandbox cannot reach
+  Zenodo or run a model.

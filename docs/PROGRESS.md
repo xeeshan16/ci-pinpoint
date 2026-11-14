@@ -490,3 +490,60 @@ image built and smoke-tested in CI, and a threat model.
 **Next (Day 7):** finish — the measured results table (tool vs baselines, dataset/provider/
 model/settings), real sample output, README polish with the Mermaid diagram, ROADMAP, a
 clean-clone quick-start check, and the `v0.1.0` tag.
+
+## Day 7: 2026-11-14, finish and v0.1.0
+
+**Shipped**
+- A fix found by the day 6 real-model run: in the injection report (18 runs, `qwen2.5:3b`,
+  [run 43432307929](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43432307929)) one
+  obeyed payload reached the brief with no warning. The payload dictated the summary
+  "BUILD OK - nothing to fix" (25 characters) and the echo check sampled 24-character
+  windows every 12 characters, so none fell inside the phrase. The check now tries every
+  offset and treats a quoted phrase of 8+ characters from a flagged line as an echo; new
+  tests use the exact reply and an echo at 13 offsets (7 of them failed on the old code).
+  `2d7c44c`.
+- `real-model` no longer cancels a measurement in progress when a newer commit lands (it
+  waits), and its limit went from 110 to 170 minutes. `9c5f2ca`.
+- The measured results in the README at the release code: the model-free table now includes
+  the embeddings variant and a by-budget table; a model-level table on 40 test-split logs; the
+  six GitHub Actions logs; the injection history including the miss above.
+- README polish: a v0.1.0 status, the "What it does" example re-recorded from the current
+  version (budget 800, where the `unknown PII type` line is shown), the sample output replaced
+  by a current real-model brief, "Design trade-offs", "What I'd do next" and updated
+  limitations. `docs/ROADMAP.md` with good-first-issue items. Install, MCP configs and action
+  references pinned to `@v0.1.0`. Version 0.1.0, CHANGELOG release section.
+
+**Measured** (CI, at commit `51ee26b`; v0.1.0 changes only the output check, docs and CI)
+- LogChunks test split, 584 logs, 2,000 tokens ([CI run 43431753783](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43431753783)):
+  failure shown 91.6% vs 69.7% `tail` and 56.5% `grep`; line recall 78.3% vs 64.5% and 18.5%;
+  +13.8 points over `tail` (95% CI +10.4 to +17.2). Identical to day 3, as expected: selection
+  has not changed since.
+- With `nomic-embed-text` embeddings ([eval run 43596658594](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43596658594)):
+  +0.5 to +0.9 points of recall at every budget from 500 to 4,000 tokens, each interval above
+  zero. Small but real; embeddings stay opt-in because they need a second model.
+- `qwen2.5:3b` on 40 test-split logs (same run): 35/40 verified, 20/40 cite a labelled line,
+  citation precision 37.0%, 2 errors, 97.7 s per log. Day 3 and 4 had 9/20 and 10/20 on a
+  20-log sample.
+- Six labelled GitHub Actions logs: the root cause is in the excerpt 6/6 at every budget
+  (`tail` 0/6 at 500, 1/6 at 2,000). With `qwen2.5:3b`: cited 4/6 in run 43432307929 and 2/6
+  in the next run at `2d7c44c` (a runner about 1.5x slower, one reply timed out); selection
+  is identical, so this is model variance. With `--rerank` in that second run: 5/6.
+
+**Verified**
+- Quick start from GitHub in a clean tool environment: `uv tool install
+  git+https://github.com/xeeshan16/ci-pinpoint` (main at `2d7c44c`), then `explain` on a
+  fixture with `--no-llm`, `explain` on the public kafka-llm-enricher run URL, and the MCP
+  `initialize` handshake. Locally in the sandbox; the model path was verified only in CI.
+- 427 tests pass locally (2 live API tests run in CI only); ruff, ruff format, mypy strict
+  clean. CI green on `2d7c44c` and `9c5f2ca`.
+
+**Found along the way**
+- The re-measure of the echo fix ([run 43597447815](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43597447815))
+  hit the 110-minute limit during the last of the 18 injection cases, so its table was never
+  written. In the 17 cases that finished, the brief for the override payload carried a
+  warning on 5 of the 6 logs; the sixth had none, and whether the model obeyed there (the
+  report's "silent") cannot be told from the job log alone. The restarted run on `9c5f2ca` ([run 43607383674](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43607383674))
+  has the longer limit; its result was not in yet at the tag.
+- The repository description and topics could not be set from the build environment.
+
+**Next:** see [ROADMAP.md](ROADMAP.md).

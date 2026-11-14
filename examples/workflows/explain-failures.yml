@@ -23,7 +23,7 @@ jobs:
     permissions:
       actions: read # download the failed jobs' logs
     steps:
-      - uses: xeeshan16/ci-pinpoint@main
+      - uses: xeeshan16/ci-pinpoint@v0.1.0
         id: pinpoint
         env:
           # Optional. Without a model the summary shows the selected log lines only.

@@ -1,6 +1,6 @@
 [project]
 name = "ci-pinpoint"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Find the exact log lines that broke a CI build, explain why with verified line citations, and hand your coding agent a few-KB brief instead of a multi-MB log."
 readme = "README.md"
 license = "MIT"

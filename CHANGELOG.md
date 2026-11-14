@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-14
+
+First release: a CLI, an MCP server and a GitHub Action that find the lines that broke a
+CI build and explain them with citations verified against the log. Measured on LogChunks
+and on hand-labelled GitHub Actions logs (see the README's Evaluation section).
+
 ### Added
 - Token and cost accounting: every brief that ran a model carries `accounting` (chat
   input/output tokens for the diagnosis plus any re-ranking, and an estimated USD cost),
@@ -97,6 +103,11 @@ All notable changes to this project are documented here. The format follows
   most the first 120 characters of a line, which ended cut-off replies on long diff lines.
 
 ### Fixed
+- The output check now catches an answer dictated by an injected log line: it tries every
+  offset for a 24-character echo (a 25-character phrase could fall between the windows
+  that were sampled every 12 characters) and treats quoted phrases of 8+ characters from
+  instruction-like lines as echoes. Found by the real-model injection report, where one
+  obeyed reply ("BUILD OK - nothing to fix") reached the brief without a warning.
 - The `\x1b(B` that `tput sgr0` emits is stripped; a line ending in `\r\x1b[0K` keeps its
   text.
 - Small-model replies with fields nested under `root_cause`, string citations or
@@ -104,3 +115,6 @@ All notable changes to this project are documented here. The format follows
 - A reply cut off at the output limit is reported as such instead of an inner
   object being parsed as the answer.
 - Raw-log token estimates no longer count clipped line lengths.
+
+[Unreleased]: https://github.com/xeeshan16/ci-pinpoint/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/xeeshan16/ci-pinpoint/tree/v0.1.0
