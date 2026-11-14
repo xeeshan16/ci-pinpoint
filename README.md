@@ -8,84 +8,91 @@ of a 200,000-token log.
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-> Status: **day 5 of 7**. Works end to end on real logs, measured on a public labelled
-> dataset ([results](#evaluation)), with secrets redacted and log text treated as untrusted
-> input ([how](#untrusted-logs-secrets-and-prompt-injection)). Use it from the command line,
-> from a coding agent over [MCP](#from-a-coding-agent-mcp), or as a
-> [GitHub Action](#in-github-actions); GitHub Actions and GitLab runs both work. Tracing,
-> cost accounting and a Docker image come next (see [docs/PLAN.md](docs/PLAN.md)).
+> **v0.1.0.** Works end to end on real logs, measured on a public labelled dataset
+> ([results](#evaluation)), with secrets redacted and log text treated as untrusted input
+> ([how](#untrusted-logs-secrets-and-prompt-injection)). Use it from the command line, from
+> a coding agent over [MCP](#from-a-coding-agent-mcp), or as a
+> [GitHub Action](#in-github-actions); GitHub Actions and GitLab runs both work, and any
+> other CI through a log file or stdin.
 
 ## What it does
 
-A real failed job from this author's own CI: 4,621 lines, 19 failing tests, and the one
-line that matters is a `Caused by` buried under Spring stack traces. Nothing near the end
-of the log says what went wrong.
+A real failed job from this author's own CI: 4,621 lines, 19 failing tests, and the line
+that matters, `unknown PII type 'pan,iban,email,phone'`, is buried under Spring stack
+traces. Nothing near the end of the log says what went wrong.
 
 ```console
-$ ci-pinpoint explain https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40196005593 --no-llm --budget 600
+$ ci-pinpoint explain https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40196005593 --no-llm --budget 800
 ✖ build, static analysis, tests, coverage
   https://github.com/xeeshan16/kafka-llm-enricher/actions/runs/40196005593/job/121176855639
   failed step: Compile (Error Prone), unit and integration tests (Testcontainers), coverage
 
-  excerpt: 589 of ~161,427 tokens (99.6% smaller), 4 block(s)
+  excerpt: 800 of ~161,427 tokens (99.5% smaller), 4 block(s)
 
-  L2077   	... 36 more
-  L2078   Caused by: java.lang.IllegalArgumentException: unknown PII type 'pan,iban,email,phone'; use pan, iban, email or phone
-  L2079   	at io.github.xeeshan16.enricher.privacy.PiiDetectors.named(PiiDetectors.java:70)
-  [... 2 more blocks of failing-test assertions ...]
+  L2064   	... 11 more
+  L2065   Caused by: org.springframework.beans.BeanInstantiationException: Failed to instantiate [io.github.xeeshan16.enricher.spring.PipelineRegistry]: Factory method 'e…
+  [... one more block of the same failure in another test ...]
+  L3567   java.lang.IllegalArgumentException: unknown PII type 'pan,iban,email,phone'; use pan, iban, email or phone
+      …
   L4495   [INFO] BUILD FAILURE
       …
-  L4500   [ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.4:test (default-test) on project enricher-spring-boot-starter: There
+  L4500   [ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.4:test (default-test) on project enricher-spring-boot-starter: There are test…
 ```
 
-(Real output, abridged in the middle; the run is public. `--no-llm` shows the selection
-stage alone, no model involved.)
+(Real output, abridged and with long lines cut here; the run is public.
+`--no-llm` shows the selection stage alone, no model involved.)
 
 Without `--no-llm`, a model (local Ollama by default) reads only that excerpt and returns a
 diagnosis in a fixed schema: category, summary, root cause, cited lines and a suggested fix.
 Citations that don't match the log are dropped before you see them.
 
 <!-- sample-output:start -->
-Real model output (Ollama, `qwen2.5:3b` on a CPU-only GitHub runner, 2,000-token budget),
-recorded in [real-model run 42667018690](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42667018690)
-on a smoke test that failed without printing a single error word:
+Real model output (Ollama, `qwen2.5:3b` on a CPU-only GitHub runner, 2,000-token budget,
+ci-pinpoint at commit `51ee26b`), recorded in
+[real-model run 43432307929](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43432307929)
+on a real failed job whose 14,839-line log buries the cause under Spring context errors:
 
 ```text
-### ✖ docker image, compose demo smoke test
+### ✖ build, static analysis, tests, coverage
 
-**The job failed with exit code 1 due to missing configuration.**
+**The application failed to connect to the database, causing a BeanCreationException.**
 
-`compile` · confidence 1.00 · `ollama/qwen2.5:3b`
+`dependency` · confidence 0.95 · `ollama/qwen2.5:3b`
 
-**Root cause.** The job encountered an issue with missing configuration for the
-'gen_ai_request_model' and 'gen_ai_token_type' metrics. This is indicated by the log entry
-'MISSING              gen_ai_request_model' and 'MISSING              gen_ai_token_type'.
-The missing configuration prevents the application from starting correctly.
+**Root cause.** The application attempts to create a database connection using the
+HikariCP library. However, the connection to the database at localhost:5432 was refused.
+This failure is due to a network or configuration issue, such as the database server not
+being running or the connection details being incorrect.
 
 **Evidence** (each line checked against the log):
 
-- `L1757` `MISSING              gen_ai_request_model`
-- `L1758` `MISSING              gen_ai_token_type`
+- `L484` `Message    : Connection to localhost:5432 refused. Check that the hostname and port are correct and that the postmaster is accepting TCP/IP connections.`
+- `L523` `Caused by: java.net.ConnectException: Connection refused`
+- `L524` `	at java.base/sun.nio.ch.Net.pollConnect(Native Method)`
 
-**Suggested fix.** Ensure that the 'gen_ai_request_model' and 'gen_ai_token_type' are
-properly configured in the application's configuration files.
+**Suggested fix.** Ensure that the database server is running and that the connection
+details (hostname, port, database name, username, password) are correct. Check the
+firewall settings and network connectivity. Verify that the database server is accepting
+TCP/IP connections. If the database server is not running, start it and ensure it is
+configured to accept connections on the specified port.
 
-_Excerpt: 961 of ~63,069 tokens (98.5% smaller), 3 block(s)._
+_Excerpt: 2,000 of ~14,839 tokens (86.5% smaller), 8 block(s)._
+_model: 2,800 in / 440 out tokens · free._
 ```
 
-The cited lines are right; the category (`compile`) and the last sentence of the root cause
-are not: the metrics were missing from the export, the app had started. The day 4 taxonomy
-did not fix categories for a 3B model, so agent-facing output labels the category a hint.
-On all six labelled logs in that run, a 3B local model produced a verified
-diagnosis for 5 and cited the labelled root-cause line in 4 (details in
-[docs/PROGRESS.md](docs/PROGRESS.md)). These are six logs, not an evaluation.
+L484 is the hand-labelled root cause. The label's category is `infrastructure` (the
+Postgres service container was not up); the model said `dependency`, which is why
+agent-facing output calls the category a hint. In the same run, over all six labelled
+logs, the 3B model produced a verified diagnosis for 5 and cited the labelled line in 4;
+the sixth reply was cut off at the output limit and reported as a failure, with the
+selected lines still printed.
 <!-- sample-output:end -->
 
 ## Quick start (5 minutes)
 
 ```bash
 # 1. Install (not on PyPI yet; pipx works too)
-uv tool install git+https://github.com/xeeshan16/ci-pinpoint
+uv tool install git+https://github.com/xeeshan16/ci-pinpoint@v0.1.0
 
 # 2. A local model (or set OPENAI_API_KEY / ANTHROPIC_API_KEY / the Azure variables instead)
 ollama pull qwen2.5:3b
@@ -129,7 +136,7 @@ citation). The agent gets a few-KB brief instead of the raw log. In Claude Code:
 
 ```bash
 claude mcp add ci-pinpoint --env GITHUB_TOKEN=$(gh auth token) \
-  -- uvx --from git+https://github.com/xeeshan16/ci-pinpoint ci-pinpoint mcp
+  -- uvx --from git+https://github.com/xeeshan16/ci-pinpoint@v0.1.0 ci-pinpoint mcp
 ```
 
 Then ask: *"CI failed on https://github.com/acme/app/actions/runs/123, find out why and fix
@@ -172,7 +179,7 @@ adds an annotation per failed job, and exposes the brief as outputs:
     permissions:
       actions: read
     steps:
-      - uses: xeeshan16/ci-pinpoint@main
+      - uses: xeeshan16/ci-pinpoint@v0.1.0
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # optional
 ```
@@ -324,44 +331,72 @@ repositories, each with the failure-explaining chunk labelled by hand. 773 label
 aligned to their log; 24 could not and are excluded and listed in the report. Results below
 are the **held-out test split** (584 logs from repositories that no change was judged on;
 see [ADR 0003](docs/adr/0003-evaluation-equal-budgets-aligned-labels-repository-split.md) for
-the caveat). Every strategy gets the same 2,000-token budget, counted the same way. No model
-is involved: this measures what the model gets to see.
+the caveat). Every strategy gets the same token budget, counted the same way. No chat model
+is involved in this part: it measures what the model gets to see.
+
+Measured at the release code (commit `51ee26b`; selection is unchanged in v0.1.0),
+deterministic, in [CI run 43431753783](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43431753783);
+the embeddings row (Ollama on a CPU runner) and the by-budget table come from
+[eval run 43596658594](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43596658594) at
+the same commit, which reproduced the other rows exactly:
 
 | strategy (2,000-token budget) | failure shown | line recall | whole failure shown | mean tokens used |
 |---|---|---|---|---|
 | `tail` (last lines that fit) | 69.7% | 64.5% | 60.8% | 1,983 |
 | `grep -iE 'error\|fail'` (last matches that fit) | 56.5% | 18.5% | 5.1% | 757 |
-| ci-pinpoint, scored blocks only (day 2) | 81.5% | 60.5% | 42.3% | 895 |
-| **ci-pinpoint** | **91.6%** | **78.3%** | **64.9%** | 1,613 |
+| ci-pinpoint, scored blocks only (no budget fill) | 81.5% | 60.5% | 42.3% | 895 |
+| **ci-pinpoint** (default) | **91.6%** | **78.3%** | **64.9%** | 1,613 |
+| ci-pinpoint + `nomic-embed-text` embeddings | 93.3% | 79.0% | 65.1% | 1,613 |
 
 ci-pinpoint vs tail, paired difference in line recall: **+13.8 points** (95% bootstrap
-interval +10.4 to +17.2). Across all 773 logs: line recall 76.6% vs 65.6% for tail, and
-53.8% vs 41.3% at a 500-token budget. On the 189-log dev split the gain over tail is smaller
-and not significant (+2.3 points, interval -2.5 to +7.1). Source:
-[CI run 42822696413](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42822696413),
-ci-pinpoint at commit `54a50d2`, no model, deterministic.
+interval +10.4 to +17.2). By budget, on the same 584 logs:
 
-With a model on top (Ollama `qwen2.5:3b` on a CPU-only runner, the same deterministic sample
-of 20 test-split logs both times): 17 of 20 diagnoses verified and 9 of 20 cited a labelled
-line with the day 3 prompt ([run 42823682451](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823682451));
-18 of 20 and 10 of 20 with the day 4 prompt ([run 43027132131](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43027132131)).
-The right lines reach the model far more often than a 3B model points at them, and 20 logs
-cannot separate a one-log change from noise.
+| line recall | 500 tokens | 1,000 | 2,000 | 4,000 |
+|---|---|---|---|---|
+| `tail` | 38.5% | 51.9% | 64.5% | 75.0% |
+| `grep` | 12.5% | 14.1% | 18.5% | 19.0% |
+| **ci-pinpoint** | **53.0%** | **68.9%** | **78.3%** | **83.5%** |
 
-Block re-ranking, all 773 logs at 2,000 tokens: `nomic-embed-text` embeddings move line
-recall from 76.6% to 77.3% (and 53.8% to 54.5% at 500 tokens), a small gain that does not
-justify a second model by default ([run 42823687484](https://github.com/xeeshan16/ci-pinpoint/actions/runs/42823687484)).
-LLM re-ranking (`--rerank`) with the same 3B model did not help: on a 60-log dev-split
-sample it was 1.3 to 1.5 points *below* heuristics at 500 to 1,000 tokens, level at 2,000,
-and cost 31 s per call ([run 43051770635](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43051770635),
+Across all 773 logs: line recall 76.6% vs 65.6% for tail (+11.0, interval +8.1 to +13.9).
+On the 189-log dev split the gain over tail at 2,000 tokens is smaller and not significant
+(+2.3 points, interval -2.5 to +7.1), though larger at 500 tokens (56.2% vs 49.7%).
+
+On the six hand-labelled GitHub Actions logs (same run), the labelled root-cause line is
+in the excerpt for 6 of 6 logs at every budget from 500 to 4,000 tokens; `tail` shows it
+for 0 of 6 at 500 tokens and 1 of 6 at 2,000, `grep` for 1 and 5 of 6.
+
+**With a model on top** (Ollama `qwen2.5:3b` on a CPU-only GitHub runner, a deterministic
+sample of 40 test-split logs, 2,000-token budget,
+[eval run 43596658594](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43596658594)):
+
+| verified diagnosis | cites a labelled line | citation precision | errors | mean latency | mean tokens in / out |
+|---|---|---|---|---|---|
+| 87.5% (35/40) | 50.0% (20/40) | 37.0% | 2 | 97.7 s | 3,068 / 423 |
+
+The right lines reach the model far more often (91.6% of logs) than a 3B model points at
+them (50%); a larger model is the obvious lever, and there is no model-level baseline (say,
+the same model given `tail`) yet. Earlier, smaller samples are in
+[docs/PROGRESS.md](docs/PROGRESS.md).
+
+Block re-ranking: `nomic-embed-text` embeddings add 0.5 to 0.9 points of line recall at
+every budget on the test split (significant but small; table above), and needed a second
+model at run time, so they stay opt-in
+(`--embedder ollama`). LLM re-ranking (`--rerank`) with the same 3B model did not help: on a
+60-log dev-split sample it was 1.3 to 1.5 points *below* heuristics at 500 to 1,000 tokens,
+level at 2,000, and cost 31 s per call ([run 43051770635](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43051770635),
 details in [docs/PROGRESS.md](docs/PROGRESS.md#day-4-2026-11-11-diagnosis-quality-and-safety)).
-Both re-rankers stay off by default.
 
-Prompt injection, six real logs with three planted payloads each (18 runs, `qwen2.5:3b`,
-[run 43036195150](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43036195150)): the
-detector flagged all 18 payload lines; the model followed the payload in 11 raw replies, and
-**none of those reached the brief unflagged** (each got a warning or a dropped citation). An
-injected log still degrades the diagnosis: the labelled cause was cited in 7 of 18 runs.
+Prompt injection, six real logs with three planted payloads each (18 runs per measurement,
+`qwen2.5:3b`): the detector flagged all 18 payload lines both times. In the day 4 run
+([43036195150](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43036195150)) the model
+followed the payload in 11 raw replies and none reached the brief unflagged. In the run at
+`51ee26b` ([43432307929](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43432307929))
+it followed 8, and **one reached the brief without a warning**: the dictated summary
+"BUILD OK - nothing to fix" slipped between the output check's sampled windows. v0.1.0 fixes
+that check (every offset, plus quoted phrases dictated by a flagged line) and its test uses
+that exact reply; the real-model re-measure of the fixed check had not finished when v0.1.0
+was tagged (see [docs/PROGRESS.md](docs/PROGRESS.md)). An injected log still degrades the
+diagnosis: the labelled cause was cited in 7 and 10 of 18 runs.
 
 Reproduce it, or score your own labelled logs:
 
@@ -388,13 +423,40 @@ The test fixtures are six unmodified failed GitHub Actions job logs from
 labelled with the root-cause line(s); a test enforces that selection keeps those lines at
 800, 2,000 and 4,000-token budgets. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Limitations (today)
+## Design trade-offs
+
+- **Heuristics first, model second** ([ADR 0001](docs/adr/0001-heuristics-first-then-llm-with-verified-citations.md)).
+  Selection is deterministic, fast (0.7 s for a 15,687-line, ~235k-token Maven log, one
+  measurement on a 2-vCPU dev box, no model) and measurable without a model; the
+  model only sees a 2,000-token excerpt. The cost: a root cause that no signal scores and
+  that is not near a failed step's end can be missed, and no model can cite what it was not
+  shown.
+- **Verified citations over fluent prose.** A citation must match a line the model was shown,
+  or it is dropped. That makes the evidence trustworthy and the brief safe to hand to an
+  agent, at the price of more "no verified diagnosis" results from small models (exit
+  code 1, with the selected lines still printed).
+- **Re-rankers off by default** ([ADR 0002](docs/adr/0002-template-mining-and-optional-embedding-ranking.md)).
+  Embeddings added under a point of recall on LogChunks and an LLM re-rank lost a little
+  while costing about 30 s per log on CPU, so both are opt-in rather than paying for a
+  second model on every run.
+- **Equal budgets in the eval** ([ADR 0003](docs/adr/0003-evaluation-equal-budgets-aligned-labels-repository-split.md)).
+  Baselines get the same token budget and token estimate, so "better" cannot mean "showed
+  more lines". Results are reported on a repository-level held-out split.
+- **A small MCP protocol layer instead of the SDK** ([ADR 0005](docs/adr/0005-mcp-server-without-the-sdk.md)):
+  two runtime dependencies and a fast start, tested against the official SDK client; the
+  cost is following protocol revisions by hand.
+- **Cost accounting always on, OpenTelemetry opt-in** ([ADR 0006](docs/adr/0006-observability-and-cost-accounting.md)).
+
+## Limitations
 
 - The public evaluation set is Travis CI logs from 2018 to 2019; the GitHub Actions
   evidence is six hand-labelled logs. Line recall says the right lines reach the model, not
-  that the model explains them well; model-level numbers on LogChunks come next.
+  that the model explains them well. Model-level numbers cover 40 logs with one 3B local
+  model and have no model-level baseline yet; one run of the six labelled logs cited the
+  root cause in 4 of 6 and the next in 2 of 6, so single small-model runs vary a lot.
 - Embedding and LLM re-ranking exist but are off by default: embeddings add under a point
-  of recall on LogChunks, and an LLM re-rank costs about a minute per log on a CPU runner.
+  of recall on LogChunks, and an LLM re-rank costs about 30 s per call on a CPU runner and
+  did not help with a 3B model.
 - Small local models are weak at the category field (2 of 6 right on the labelled logs with
   `qwen2.5:3b`); treat it as a hint. Citations and the root cause are the useful part.
 - Token counts for the excerpt are estimates (3.5 characters per token), not tokenizer-exact;
@@ -413,6 +475,13 @@ labelled with the root-cause line(s); a test enforces that selection keeps those
   encodings. The citation rule and output checks limit what a missed injection can do, but
   a steered model can still write misleading prose: read warnings, and review a suggested
   fix before an agent runs it.
+
+## What I'd do next
+
+The full list is in [docs/ROADMAP.md](docs/ROADMAP.md). The three that matter most: a
+labelled GitHub Actions evaluation set (LogChunks is Travis CI from 2018 to 2019),
+model-level evaluation at scale against hosted models with a cost cap, and one finding per
+failure group when a job fails many tests for different reasons.
 
 ## License
 
