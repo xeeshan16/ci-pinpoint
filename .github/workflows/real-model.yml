@@ -21,16 +21,19 @@ on:
 permissions:
   contents: read
 
+# A newer push waits instead of cancelling a measurement in progress: docs-only
+# commits cancelled two runs before their last step (days 5 and 7, PROGRESS.md).
 concurrency:
   group: real-model-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   ollama:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    # Several full passes over the fixtures on a CPU runner; 75 min clipped the last step.
-    timeout-minutes: 110
+    # Several full passes over the fixtures on a CPU runner. Runner speed varies by
+    # about 1.5x between runs; 110 min clipped the last injection case on day 7.
+    timeout-minutes: 170
     env:
       MODEL: ${{ inputs.model || 'qwen2.5:3b' }}
       EMBED_MODEL: nomic-embed-text
