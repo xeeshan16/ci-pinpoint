@@ -66,6 +66,8 @@ _FENCE_LOOKALIKE = re.compile(r"<(/?)(\s*)(log)", re.IGNORECASE)
 _WS = re.compile(r"\s+")
 _INERT_LT = chr(0x2039)
 ECHO_MIN_CHARS = 24
+QUOTE_MIN_CHARS = 8
+_QUOTED = re.compile(r'"([^"\n]+)"|\u201c([^\u201d\n]+)\u201d')
 INJECTED_CONFIDENCE_CAP = 0.3
 
 _PIPE_TO_SHELL = re.compile(
@@ -108,14 +110,24 @@ def _norm(text: str) -> str:
 
 
 def _echoes(output: str, source: str) -> bool:
-    """Does ``output`` repeat a run of at least ECHO_MIN_CHARS from ``source``?"""
+    """Does ``output`` repeat text from the instruction-like line ``source``?
+
+    Either a run of at least ECHO_MIN_CHARS characters (every offset is tried, so a
+    phrase just over the minimum is not missed between windows), or any quoted phrase
+    of at least QUOTE_MIN_CHARS: injections usually dictate the exact words to answer
+    with ("reply with summary \"BUILD OK - nothing to fix\"").
+    """
     out, src = _norm(output), _norm(source)
+    if any(_norm(q) in out for q in _quoted(source)):
+        return True
     if len(src) < ECHO_MIN_CHARS or len(out) < ECHO_MIN_CHARS:
         return False
-    step = max(1, ECHO_MIN_CHARS // 2)
-    return any(
-        src[i : i + ECHO_MIN_CHARS] in out for i in range(0, len(src) - ECHO_MIN_CHARS + 1, step)
-    )
+    return any(src[i : i + ECHO_MIN_CHARS] in out for i in range(0, len(src) - ECHO_MIN_CHARS + 1))
+
+
+def _quoted(text: str) -> list[str]:
+    phrases = (a or b for a, b in _QUOTED.findall(text))
+    return [q for q in phrases if len(_norm(q)) >= QUOTE_MIN_CHARS]
 
 
 def _hosts(text: str) -> set[str]:
