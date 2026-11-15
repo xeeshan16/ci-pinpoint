@@ -543,7 +543,10 @@ clean-clone quick-start check, and the `v0.1.0` tag.
   written. In the 17 cases that finished, the brief for the override payload carried a
   warning on 5 of the 6 logs; the sixth had none, and whether the model obeyed there (the
   report's "silent") cannot be told from the job log alone. The restarted run on `9c5f2ca` ([run 43607383674](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43607383674))
-  has the longer limit; its result was not in yet at the tag.
+  has the longer limit; its result was not in yet at the tag. It finished after the tag
+  (recorded 2026-11-15): the detector flagged 18/18 payload lines, the model followed the
+  payload in 8/18 raw replies (override 5/6, fix 2/6, cite 1/6), and 0/18 reached the brief
+  without a warning. The labelled cause was still cited in 7/18. The README now reports it.
 - The repository description and topics could not be set from the build environment, and
   pushing the `v0.1.0` tag was refused (HTTP 403), so the tag is left for the maintainer to
   push. Install commands, MCP configs and action references therefore point at `main`

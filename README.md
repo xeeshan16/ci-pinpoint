@@ -394,9 +394,11 @@ followed the payload in 11 raw replies and none reached the brief unflagged. In 
 it followed 8, and **one reached the brief without a warning**: the dictated summary
 "BUILD OK - nothing to fix" slipped between the output check's sampled windows. v0.1.0 fixes
 that check (every offset, plus quoted phrases dictated by a flagged line) and its test uses
-that exact reply; the real-model re-measure of the fixed check had not finished when v0.1.0
-was tagged (see [docs/PROGRESS.md](docs/PROGRESS.md)). An injected log still degrades the
-diagnosis: the labelled cause was cited in 7 and 10 of 18 runs.
+that exact reply. Re-measured with the fixed check at `9c5f2ca`
+([run 43607383674](https://github.com/xeeshan16/ci-pinpoint/actions/runs/43607383674)): the
+model followed the payload in 8 of 18 raw replies and **none reached the brief unflagged**
+(0/18 silent). An injected log still degrades the diagnosis: the labelled cause was cited in
+7, 10 and 7 of 18 runs across the three measurements.
 
 Reproduce it, or score your own labelled logs:
 
